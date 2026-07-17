@@ -1,0 +1,164 @@
+# PowerShell Script to Run Java Data Collection Application
+# ========================================================
+# Bu script Java uygulamanızı Microsoft PowerShell'de çalıştırır
+# 
+# Kullanım:
+# 1. Bu dosyayı .ps1 uzantısıyla kaydedin (örn: run_java_app.ps1)
+# 2. PowerShell'i yönetici olarak açın
+# 3. cd "C:\path\to\your\project" komutu ile proje dizinine gidin
+# 4. .\run_java_app.ps1 komutu ile çalıştırın
+
+# Script başlangıcı
+Write-Host "🚀 Java Veri Toplama Uygulaması Başlatılıyor..." -ForegroundColor Green
+Write-Host "======================================================" -ForegroundColor Yellow
+
+# Proje dizinini kontrol et
+$projectDir = Get-Location
+Write-Host "📂 Proje Dizini: $projectDir" -ForegroundColor Cyan
+
+# Java'nın kurulu olup olmadığını kontrol et
+try {
+    $javaVersion = java -version 2>&1
+    Write-Host "☑️ Java Sürümü Tespit Edildi:" -ForegroundColor Green
+    Write-Host $javaVersion[0] -ForegroundColor White
+} catch {
+    Write-Host "❌ HATA: Java bulunamadı! Lütfen Java'yı kurun ve PATH'e ekleyin." -ForegroundColor Red
+    Write-Host "Java indirme linki: https://www.oracle.com/java/technologies/downloads/" -ForegroundColor Yellow
+    pause
+    exit 1
+}
+
+# Gerekli dizinleri oluştur
+Write-Host "📁 Gerekli dizinler oluşturuluyor..." -ForegroundColor Cyan
+
+$directories = @("bin", "data_files", "logs")
+foreach ($dir in $directories) {
+    if (!(Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Write-Host "  ✅ $dir dizini oluşturuldu" -ForegroundColor Green
+    } else {
+        Write-Host "  ☑️ $dir dizini mevcut" -ForegroundColor Gray
+    }
+}
+
+# Classpath'i oluştur
+Write-Host "🔧 Classpath oluşturuluyor..." -ForegroundColor Cyan
+
+$libDir = "libs"
+$binDir = "bin"
+$srcDir = "src"
+
+# JAR dosyalarını bul
+$jarFiles = Get-ChildItem -Path $libDir -Filter "*.jar" | ForEach-Object { $_.FullName }
+$classpath = ($jarFiles -join ";") + ";$binDir"
+
+Write-Host "  📚 Kütüphaneler yüklendi:" -ForegroundColor Green
+foreach ($jar in $jarFiles) {
+    $jarName = Split-Path $jar -Leaf
+    Write-Host "    - $jarName" -ForegroundColor White
+}
+
+# Java kaynak dosyalarını derle
+Write-Host "🔨 Java dosyaları derleniyor..." -ForegroundColor Cyan
+
+$javaFiles = Get-ChildItem -Path $srcDir -Filter "*.java"
+$javaFilePaths = $javaFiles | ForEach-Object { $_.FullName }
+
+try {
+    # Derleme komutu
+    $compileArgs = @(
+        "-cp", $classpath,
+        "-d", $binDir
+    ) + $javaFilePaths
+    
+    Write-Host "  🔄 Derleme başlatılıyor..." -ForegroundColor Yellow
+    & javac @compileArgs
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  ✅ Derleme başarılı!" -ForegroundColor Green
+    } else {
+        Write-Host "  ❌ Derleme hatası!" -ForegroundColor Red
+        pause
+        exit 1
+    }
+} catch {
+    Write-Host "❌ DERLEME HATASI: $($_.Exception.Message)" -ForegroundColor Red
+    pause
+    exit 1
+}
+
+# Konfigürasyon dosyasını kontrol et
+Write-Host "⚙️ Konfigürasyon kontrol ediliyor..." -ForegroundColor Cyan
+
+$configFile = "scheduler_config.properties"
+if (Test-Path $configFile) {
+    Write-Host "  ✅ Konfigürasyon dosyası bulundu: $configFile" -ForegroundColor Green
+} else {
+    Write-Host "  ⚠️ Konfigürasyon dosyası bulunamadı: $configFile" -ForegroundColor Yellow
+    Write-Host "  Uygulama varsayılan ayarlarla çalışabilir." -ForegroundColor Gray
+}
+
+# Java uygulamasını çalıştır
+Write-Host "🚀 Java uygulaması başlatılıyor..." -ForegroundColor Green
+Write-Host "======================================================" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "💡 Kullanılabilir komutlar:" -ForegroundColor Cyan
+Write-Host "  - 'run'    : Manuel veri toplama başlat" -ForegroundColor White
+Write-Host "  - 'status' : Durum bilgilerini göster" -ForegroundColor White
+Write-Host "  - 'reset'  : Program geçmişini sıfırla" -ForegroundColor White
+Write-Host "  - 'exit'   : Uygulamayı kapat" -ForegroundColor White
+Write-Host ""
+Write-Host "⚠️ Uygulamayı kapatmak için Ctrl+C kullanabilirsiniz." -ForegroundColor Yellow
+Write-Host ""
+
+try {
+    # Java uygulamasını çalıştır
+    $runArgs = @(
+        "-cp", $classpath,
+        "ScheduledDataCollector"
+    )
+    
+    & java @runArgs
+    
+} catch {
+    Write-Host ""
+    Write-Host "❌ ÇALIŞMA HATASI: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Olası nedenler:" -ForegroundColor Yellow
+    Write-Host "  - Veritabanı bağlantı sorunu" -ForegroundColor Gray
+    Write-Host "  - API bağlantı sorunu" -ForegroundColor Gray
+    Write-Host "  - Konfigürasyon hatası" -ForegroundColor Gray
+    Write-Host "  - Eksik kütüphane" -ForegroundColor Gray
+} finally {
+    Write-Host ""
+    Write-Host "🏁 Uygulama sonlandı." -ForegroundColor Green
+    Write-Host "======================================================" -ForegroundColor Yellow
+}
+
+# Script sonu
+Write-Host ""
+Write-Host "📝 Loglar için 'logs' klasörünü kontrol edin." -ForegroundColor Cyan
+Write-Host "📄 Çıktı dosyaları için 'data_files' klasörünü kontrol edin." -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Herhangi bir tuşa basın..." -ForegroundColor Gray
+pause
+
+# ========================================================
+# EK KOMUTLAR (İsteğe bağlı)
+# ========================================================
+
+# Sadece derleme yapmak için:
+# javac -cp "libs\*;bin" -d bin src\*.java
+
+# Sadece çalıştırmak için (önceden derlenmiş):
+# java -cp "libs\*;bin" ScheduledDataCollector
+
+# Bellek ayarları ile çalıştırmak için:
+# java -Xms512m -Xmx2048m -cp "libs\*;bin" ScheduledDataCollector
+
+# Debug modu ile çalıştırmak için:
+# java -Ddebug=true -cp "libs\*;bin" ScheduledDataCollector
+
+# Specific log level ile çalıştırmak için:
+# java -Djava.util.logging.config.file=logging.properties -cp "libs\*;bin" ScheduledDataCollector
+
+
