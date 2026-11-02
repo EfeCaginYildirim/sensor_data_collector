@@ -109,8 +109,7 @@ public final class ConfigLoader {
             required("collection.initial-start-date", LocalDate::parse, LocalDate.EPOCH),
             optional("collection.overlap", ConfigLoader::parseNonNegativeDuration, Duration.ofDays(3)),
             optional("collection.chunk", ConfigLoader::parsePositiveDuration, Duration.ofDays(30)),
-            optional("collection.run-deadline", ConfigLoader::parsePositiveDuration, Duration.ofMinutes(30)),
-            optional("collection.max-future-skew", ConfigLoader::parseNonNegativeDuration, Duration.ofHours(1)));
+            optional("collection.run-deadline", ConfigLoader::parsePositiveDuration, Duration.ofMinutes(30)));
 
         Optional<DatabaseConfig> database = value("db.url").map(url -> new DatabaseConfig(
             url,

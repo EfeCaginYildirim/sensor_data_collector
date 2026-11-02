@@ -75,7 +75,6 @@ public record AppConfig(
      * @param overlap          how far before the watermark each run re-fetches, to pick up late data
      * @param chunk            maximum length of a single API request window
      * @param runDeadline      wall-clock budget for one run; unfinished monitors are reported as failed
-     * @param maxFutureSkew    samples later than {@code now + maxFutureSkew} are rejected
      */
     public record CollectionConfig(
             int plantId,
@@ -83,8 +82,7 @@ public record AppConfig(
             LocalDate initialStartDate,
             Duration overlap,
             Duration chunk,
-            Duration runDeadline,
-            Duration maxFutureSkew) {
+            Duration runDeadline) {
 
         public CollectionConfig {
             monitorIds = List.copyOf(monitorIds);
