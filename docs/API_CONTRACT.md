@@ -2,8 +2,8 @@
 
 The collector was originally written against a commercial condition-monitoring API during an
 internship. That API, its credentials and the plant's data are no longer accessible, so this
-contract was **reconstructed from the original client code** (the request builders and the
-JSON parsing logic in `legacy/`). It is what `FakeMonitoringServer` implements and what the
+contract was **reconstructed from the original client code** — its request builders and JSON parsing
+logic, which remain in the Git history (commit `358ad6d`). It is what `FakeMonitoringServer` implements and what the
 client is tested against.
 
 Statements marked **Assumption** could not be verified against the real service.

@@ -136,7 +136,7 @@ public final class CollectionJob {
         String runId = UUID.randomUUID().toString().substring(0, 8);
         long startNanos = System.nanoTime();
         Instant now = clock.instant().truncatedTo(ChronoUnit.SECONDS);
-        LOG.log(System.Logger.Level.INFO, "Run {0} started for {1} monitors", runId, config.monitorIds().size());
+        LOG.log(System.Logger.Level.INFO, () -> "Run " + runId + " started for " + config.monitorIds().size() + " monitors");
 
         Plant plant;
         try {
@@ -184,7 +184,7 @@ public final class CollectionJob {
                 pending.remove(f.plan().monitorId());
                 MonitorOutcome outcome = persist(f, now, saved);
                 outcomes.put(outcome.monitorId(), outcome);
-                LOG.log(System.Logger.Level.INFO, "Run {0}: monitor {1} {2}", runId, outcome.monitorId(), outcome.outcome());
+                LOG.log(System.Logger.Level.INFO, () -> "Run " + runId + ": monitor " + outcome.monitorId() + " " + outcome.outcome());
             }
             if (!pending.isEmpty()) {
                 executor.shutdownNow();
@@ -305,7 +305,7 @@ public final class CollectionJob {
         if (snapshots.isPresent() && !saved.isEmpty()) {
             try {
                 Path file = snapshots.get().write(report, saved);
-                LOG.log(System.Logger.Level.INFO, "Run {0}: snapshot written to {1}", runId, file);
+                LOG.log(System.Logger.Level.INFO, () -> "Run " + runId + ": snapshot written to " + file);
             } catch (IOException | RuntimeException e) {
                 allWarnings.add("snapshot could not be written: " + e.getClass().getSimpleName() + ": " + message(e));
                 report = new RunReport(runId, now, elapsed, status, failure, outcomes, allWarnings);

@@ -1,38 +1,23 @@
-# ============================================================
-# Java Compiled Output
-# ============================================================
-bin/
+# Build output
+target/
 *.class
 
-# ============================================================
-# IDE Files - Eclipse
-# ============================================================
+# IDEs
+.idea/
+*.iml
+.vscode/
 .classpath
 .project
 .settings/
-.metadata/
 
-# ============================================================
-# Runtime Data & Logs
-# ============================================================
-data_files/*
-!data_files/README.md
+# Local configuration with secrets — use config/collector.example.properties as the template
+config/collector.properties
+
+# Runtime output
+data_files/
 logs/
-last_run_timestamp.txt
-
-# ============================================================
-# Configuration with Secrets
-# Keep scheduler_config.properties OUT of git.
-# Use scheduler_config.properties.example as the template.
-# ============================================================
-scheduler_config.properties
-
-# ============================================================
-# macOS
-# ============================================================
-.DS_Store
-
-# ============================================================
-# Miscellaneous
-# ============================================================
 *.log
+
+# OS
+.DS_Store
+Thumbs.db

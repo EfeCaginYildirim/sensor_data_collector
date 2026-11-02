@@ -231,7 +231,8 @@ public final class Main {
         SyntheticFleet fleet = SyntheticFleet.create(1, ids, SyntheticFleet.Options.defaults(o.intOption("seed", 42), now));
         Logging.configure(Level.INFO, Optional.empty());
         CountDownLatch stopped = new CountDownLatch(1);
-        FakeMonitoringServer server = FakeMonitoringServer.start(fleet, Clock.systemUTC(), "demo", "demo", port);
+        FakeMonitoringServer server = FakeMonitoringServer.start(fleet, Clock.systemUTC(), "demo", "demo",
+            o.value("host").orElse("127.0.0.1"), port);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             server.close();
             stopped.countDown();
@@ -288,7 +289,7 @@ public final class Main {
     /** Compares the first and last week of key bearing indicators per monitor. */
     static String healthTable(InMemoryMotorDataRepository repo, List<Integer> ids) {
         StringBuilder sb = new StringBuilder("Fleet health (first week -> last week of collected data)\n");
-        sb.append(String.format("  %-6s %-24s %-7s %-17s %-17s%n", "id", "monitor", "health", "kurtosis X", "BPFO amplitude"));
+        sb.append(String.format("  %-6s %-24s %-7s %-22s %s%n", "id", "monitor", "health", "kurtosis X", "BPFO amplitude"));
         for (int id : ids) {
             List<ComputedFeatureSample> samples = repo.computedFeatures(id);
             if (samples.isEmpty()) {
@@ -299,7 +300,7 @@ public final class Main {
             Integer health = Optional.ofNullable(repo.statusSnapshots(id).lastEntry()).map(Entry::getValue)
                 .map(MonitorStatus::healthScore).orElse(null);
             String name = repo.monitor(id).map(p -> p.machine().name() + " " + p.monitor().name()).orElse("?");
-            sb.append(String.format("  %-6d %-24s %-7s %-17s %-17s%n", id, name, health == null ? "-" : health,
+            sb.append(String.format("  %-6d %-24s %-7s %-22s %s%n", id, name, health == null ? "-" : health,
                 trend(samples, ComputedFeature.KURTACCLX, first, last), trend(samples, ComputedFeature.BPFO, first, last)));
         }
         return sb.toString();
@@ -345,6 +346,7 @@ public final class Main {
               --latency-ms <n>       benchmark: artificial latency per request (50)
               --concurrency <list>   benchmark: levels to compare (1,2,4,8,16)
               --port <n>             fake-api: TCP port (8080)
+              --host <address>       fake-api: interface to bind (127.0.0.1; use 0.0.0.0 in containers)
 
             Every configuration key can be overridden by an environment variable,
             e.g. api.password -> SDC_API_PASSWORD.""");

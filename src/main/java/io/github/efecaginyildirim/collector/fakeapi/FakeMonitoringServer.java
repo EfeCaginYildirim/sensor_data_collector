@@ -127,12 +127,13 @@ public final class FakeMonitoringServer implements AutoCloseable {
     private volatile Duration latency = Duration.ZERO;
     private volatile boolean legacyTrendHistoryShape;
 
-    private FakeMonitoringServer(SyntheticFleet fleet, Clock clock, String username, String password, int port) throws IOException {
+    private FakeMonitoringServer(SyntheticFleet fleet, Clock clock, String username, String password,
+                                 String host, int port) throws IOException {
         this.fleet = Objects.requireNonNull(fleet);
         this.clock = Objects.requireNonNull(clock);
         this.username = username;
         this.password = password;
-        this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
+        this.server = HttpServer.create(new InetSocketAddress(host, port), 0);
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
         server.createContext(BASE_PATH, this::handle);
@@ -164,7 +165,24 @@ public final class FakeMonitoringServer implements AutoCloseable {
      * @throws IOException if the socket cannot be bound
      */
     public static FakeMonitoringServer start(SyntheticFleet fleet, Clock clock, String username, String password, int port) throws IOException {
-        FakeMonitoringServer s = new FakeMonitoringServer(fleet, clock, username, password, port);
+        return start(fleet, clock, username, password, "127.0.0.1", port);
+    }
+
+    /**
+     * Starts a server on a given interface and port.
+     *
+     * @param fleet    data to serve
+     * @param clock    the server's notion of "now"
+     * @param username accepted API username
+     * @param password accepted API password
+     * @param host     interface to bind, e.g. {@code 0.0.0.0} inside a container
+     * @param port     TCP port, {@code 0} for any free port
+     * @return the running server
+     * @throws IOException if the socket cannot be bound
+     */
+    public static FakeMonitoringServer start(SyntheticFleet fleet, Clock clock, String username, String password,
+                                             String host, int port) throws IOException {
+        FakeMonitoringServer s = new FakeMonitoringServer(fleet, clock, username, password, host, port);
         s.server.start();
         return s;
     }

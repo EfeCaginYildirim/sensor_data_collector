@@ -222,19 +222,21 @@ public final class HttpMonitoringApi implements MonitoringApi {
                     throw new ApiException(endpoint, status, retryable, attempt,
                         "HTTP " + status + " " + abbreviate(response.body()), null);
                 }
-                wait = status == 429
+                Duration delay = status == 429
                     ? retryPolicy.retryAfter(response.headers().firstValue("Retry-After").orElse(null))
                         .orElseGet(() -> retryPolicy.backoff(1, random))
                     : retryPolicy.backoff(attempt, random);
-                LOG.log(System.Logger.Level.WARNING, "{0}: HTTP {1} on attempt {2}/{3}, retrying in {4} ms",
-                    endpoint, status, attempt, retryPolicy.maxAttempts(), wait.toMillis());
+                String context = endpoint + ": HTTP " + status + " on attempt " + attemptText(attempt);
+                LOG.log(System.Logger.Level.WARNING, () -> context + ", retrying in " + delay.toMillis() + " ms");
+                wait = delay;
             } catch (IOException e) {
                 if (attempt >= retryPolicy.maxAttempts()) {
                     throw new ApiException(endpoint, 0, true, attempt, e.getClass().getSimpleName() + ": " + e.getMessage(), e);
                 }
-                wait = retryPolicy.backoff(attempt, random);
-                LOG.log(System.Logger.Level.WARNING, "{0}: {1} on attempt {2}/{3}, retrying in {4} ms",
-                    endpoint, e.getClass().getSimpleName(), attempt, retryPolicy.maxAttempts(), wait.toMillis());
+                Duration delay = retryPolicy.backoff(attempt, random);
+                String context = endpoint + ": " + e.getClass().getSimpleName() + " on attempt " + attemptText(attempt);
+                LOG.log(System.Logger.Level.WARNING, () -> context + ", retrying in " + delay.toMillis() + " ms");
+                wait = delay;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new ApiException(endpoint, 0, false, attempt, "interrupted", e);
@@ -242,6 +244,10 @@ public final class HttpMonitoringApi implements MonitoringApi {
             pause(endpoint, attempt, wait);
             attempt++;
         }
+    }
+
+    private String attemptText(int attempt) {
+        return attempt + "/" + retryPolicy.maxAttempts();
     }
 
     private void pause(String endpoint, int attempt, Duration wait) {
