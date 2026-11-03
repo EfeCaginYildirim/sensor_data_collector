@@ -133,10 +133,10 @@ class ConfigLoaderTest {
         Path file = dir.resolve("app.properties");
         StringBuilder sb = new StringBuilder();
         minimal().forEach((k, v) -> sb.append(k).append('=').append(v).append('\n'));
-        sb.append("api.username=çağın\n");
+        sb.append("api.username=Łódź\n");
         Files.writeString(file, sb.toString(), StandardCharsets.UTF_8);
 
-        assertEquals("çağın", ConfigLoader.load(file, Map.of()).api().username());
+        assertEquals("Łódź", ConfigLoader.load(file, Map.of()).api().username());
 
         ConfigException e = assertThrows(ConfigException.class,
             () -> ConfigLoader.load(dir.resolve("missing.properties"), Map.of()));

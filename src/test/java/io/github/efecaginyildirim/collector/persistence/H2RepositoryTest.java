@@ -116,7 +116,7 @@ class H2RepositoryTest {
         values.put(ComputedFeature.RPM, 1479.123456789);
         values.put(ComputedFeature.LOAD, 0.0);
         ComputedFeatureSample sample = new ComputedFeatureSample(T0.plusMillis(250), values);
-        BasicFeature basic = new BasicFeature(T0, "çağın-ü", "{\"note\":\"titreşim\"}", "{}", "{}");
+        BasicFeature basic = new BasicFeature(T0, "Łódź-ž", "{\"note\":\"vibration Ω\"}", "{}", "{}");
         TimeWindow w = new TimeWindow(T0, T0.plusSeconds(60));
 
         repo.save(new MonitorBatch(placement(7), w.end(), w, List.of(basic), List.of(sample)));
@@ -236,13 +236,13 @@ class H2RepositoryTest {
     void runHistoryIsNewestFirst() {
         repo.record(new RunRecord("a", T0, Duration.ofMillis(1200), "SUCCESS", Optional.empty(), 3, 0, 15, "summary a"));
         repo.record(new RunRecord("b", T0.plus(Duration.ofDays(1)), Duration.ofMillis(800), "PARTIAL",
-            Optional.of("x".repeat(3000)), 3, 1, 5, "summary b — ç"));
+            Optional.of("x".repeat(3000)), 3, 1, 5, "summary b — ž"));
 
         List<RunRecord> runs = repo.recentRuns(10);
         assertEquals(List.of("b", "a"), runs.stream().map(RunRecord::runId).toList());
         assertEquals(Duration.ofMillis(800), runs.get(0).elapsed());
         assertEquals(2000, runs.get(0).failure().orElseThrow().length(), "long failures are truncated");
-        assertEquals("summary b — ç", runs.get(0).summary());
+        assertEquals("summary b — ž", runs.get(0).summary());
         assertEquals(1, repo.recentRuns(1).size());
     }
 
@@ -255,7 +255,7 @@ class H2RepositoryTest {
         TimeWindow day2 = new TimeWindow(T0.plus(Duration.ofDays(1)), T0.plus(Duration.ofDays(2)));
 
         SampleExclusion a = repo.addExclusion(101, day2, "  bearing replaced  ", T0);
-        SampleExclusion b = repo.addExclusion(102, new TimeWindow(T0, T0.plusSeconds(3600)), "sensor unplugged — ç", T0);
+        SampleExclusion b = repo.addExclusion(102, new TimeWindow(T0, T0.plusSeconds(3600)), "sensor unplugged — ž", T0);
 
         assertTrue(a.id() > 0 && b.id() > a.id());
         assertEquals("bearing replaced", a.reason(), "reasons are trimmed");

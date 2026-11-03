@@ -65,11 +65,11 @@ class SettingsAndPathsTest {
         Path file = dir.resolve("nested/settings.properties");
         SettingsStore store = new SettingsStore(file, PARIS);
 
-        assertEquals(List.of(), store.update(apiSettings("s3cret-ğüş")));
+        assertEquals(List.of(), store.update(apiSettings("s3cret-žłΩ")));
 
         Map<String, String> reloaded = new SettingsStore(file, PARIS).load();
         assertEquals("api", reloaded.get("ui.mode"));
-        assertEquals("s3cret-ğüş", reloaded.get("api.password"), "password is saved, UTF-8 intact");
+        assertEquals("s3cret-žłΩ", reloaded.get("api.password"), "password is saved, UTF-8 intact");
         AppConfig config = SettingsStore.apiConfig(reloaded);
         assertEquals(List.of(1001, 1002), config.collection().monitorIds());
         assertEquals(ZoneId.of("Europe/Istanbul"), config.schedule().zone());
