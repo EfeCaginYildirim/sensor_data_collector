@@ -12,8 +12,34 @@ the vendor, and measurably parallel. Data can go to SQL Server or to a single em
 
 ```bash
 mvn -q package -DskipTests
-java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar demo
+java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar ui     # desktop app in the browser
+java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar demo   # same idea on the console
 ```
+
+## Desktop app
+
+`ui` starts a small local web server and opens the app in the default browser. It starts in demo
+mode, so it works without credentials; switch to your vendor API in Settings.
+
+![Monitors view: motors grouped by machine, each with a velocity strip against its alarm thresholds and a trend chart](docs/screenshots/monitors.png)
+
+- **Monitors** — every sensor with its health score and a strip showing RMS velocity against the
+  vendor's own thresholds (normal, elevated, caution, warning), plus a trend chart of any two
+  features. The demo fleet includes two motors with a developing bearing defect.
+- **Collect** — run a collection, watch it fetch time range by time range, read the run history.
+- **Settings** — demo or vendor API, credentials (the password is saved in your user folder and
+  never sent back to the browser), and an optional daily schedule.
+
+It is deliberately light: no framework, no build step for the front end, one 50 KB chart library
+(uPlot). Data and settings live in the platform's app-data folder (`%APPDATA%\SensorDataCollector`
+on Windows, `~/Library/Application Support/SensorDataCollector` on macOS), in one embedded H2
+file per mode.
+
+The server only listens on `127.0.0.1`. The link the app opens carries a random 256-bit token,
+which is exchanged for an `HttpOnly`, `SameSite=Strict` cookie; requests with a foreign `Host`
+header (DNS rebinding), cross-origin or non-JSON writes are refused, and a strict
+Content-Security-Policy allows only the app's own scripts. Starting the app twice opens the
+running instance instead of a second server.
 
 `demo` needs no credentials or database: it starts a built-in fake of the vendor API with six
 synthetic motors (two of them developing a bearing defect), backfills 60 days, runs again "one day
@@ -81,6 +107,7 @@ flowchart LR
 | **Daily scheduler that recomputes the next local run time** | A fixed 24 h period drifts by an hour across DST, and `scheduleAtFixedRate` silently stops after one uncaught exception. |
 | **`run` as a one-shot command with exit codes** next to `daemon` | Lets cron / Windows Task Scheduler own scheduling, retries and alerting. |
 | **Two databases, one code path:** SQL Server for production, embedded **H2** for the desktop, the demo and tests | H2 runs in MSSQLServer mode, so inserts, deletes and selects are shared; only the DDL and two upserts differ (`SqlDialect`). The embedded store is a single file and needs no server. |
+| **Local web UI** instead of Swing/JavaFX or Electron | Modern look with no extra runtime: the JDK's HTTP server and plain HTML/JS. The browser is opened with the OS's own opener, so the packaged runtime does not need `java.desktop`. |
 | No connection pool, no logging framework, no Mockito | One writer and a few connections per day do not need a pool; `System.Logger` + JUL is enough; hand-written fakes test more than mocks. The only runtime dependencies are Jackson and the SQL Server driver. |
 
 ## Benchmark
@@ -120,12 +147,15 @@ brings its own:
   transaction boundaries, which covers the SQL Server-specific statements without a server.
   `docker compose up` runs the same code against a real SQL Server.
 
-The suite has 152 tests and runs in under 30 seconds. Examples of what it pins down:
+The suite has 184 tests and runs in under a minute. The web UI is also checked in a real browser
+(Playwright, Chromium) during development: sign-in, a full collection, the chart, settings
+validation and the mobile layout, with no console errors. Examples of what it pins down:
 
 - a `401` is sent once, not three times; a `503` is retried with growing backoff;
 - ten days of downtime leave no gap;
 - a failing chunk keeps only the gap-free prefix, and the next run resumes there;
 - a database error is reported as a failure (the first version reported it as "0 new rows");
+- the UI API refuses foreign `Host` headers, cross-site writes, missing sessions and path traversal;
 - in-flight requests never exceed the configured limit;
 - the scheduler stays at 09:00 local time across DST and survives an `Error` thrown by a run.
 
@@ -167,6 +197,7 @@ docker compose up --build
 | `demo` | Backfill + incremental run against the fake API (`--days`, `--monitors`, `--snapshot-dir`). |
 | `benchmark` | Compare concurrency levels (`--monitors`, `--days`, `--latency-ms`, `--concurrency 1,4,8`). |
 | `fake-api` | Serve the fake API on `--port` (default 8080), e.g. to try `run --in-memory` by hand. |
+| `ui` | Desktop app in the browser (`--data-dir`, `--port`, `--no-browser`). |
 
 ### Configuration
 
@@ -195,8 +226,9 @@ Invalid configuration is reported all at once, with every problem listed.
 
 ```
 src/main/java/io/github/efecaginyildirim/collector/
-├── app/          CLI, DailyScheduler, logging
-├── collect/      CollectionJob, RunListener, WindowPlanner, RunReport, SnapshotWriter
+├── app/          CLI, logging
+├── ui/           UiServer, CollectorService, SettingsStore, ProgressTracker, SingleInstance
+├── collect/      CollectionJob, RunListener, DailyScheduler, WindowPlanner, RunReport
 ├── api/          MonitoringApi, HttpMonitoringApi, RetryPolicy, ApiJsonMapper
 ├── persistence/  MotorDataRepository / -Reader, RunHistory, JdbcMotorDataRepository, SqlDialect, H2Database
 ├── model/        Plant, MonitorInfo, BasicFeature, ComputedFeatureSample, ComputedFeature

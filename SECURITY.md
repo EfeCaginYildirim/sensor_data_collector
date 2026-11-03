@@ -3,6 +3,11 @@
 - **Secrets never go into Git.** `config/collector.properties` is ignored; commit only
   `config/collector.example.properties`. In containers and CI, pass secrets as environment
   variables (`SDC_API_PASSWORD`, `SDC_DB_PASSWORD`, …) instead of files.
+- The desktop app saves the API password in `settings.properties` in the user's app-data folder,
+  written with owner-only permissions on macOS/Linux (Windows keeps `%APPDATA%` private to the
+  user). It is never returned by the local API. Delete the file to forget it.
+- The desktop UI listens on `127.0.0.1` only and requires the per-launch session token; see the
+  "Desktop app" section of the README for the full list of protections.
 - Configuration objects mask passwords in `toString()`, so logging a configuration is safe.
 - HTTP error bodies are truncated to 300 characters before they are logged.
 - Use `encrypt=true` with a trusted certificate for SQL Server. `trustServerCertificate=true`

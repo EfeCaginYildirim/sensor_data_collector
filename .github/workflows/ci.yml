@@ -24,7 +24,15 @@ jobs:
         run: mvn -B javadoc:javadoc
 
       - name: Smoke-test the packaged jar
-        run: java -jar target/sensor-data-collector-*-SNAPSHOT.jar demo --days 30 --monitors 3
+        run: |
+          java -jar target/sensor-data-collector-*-SNAPSHOT.jar demo --days 30 --monitors 3
+          java -jar target/sensor-data-collector-*-SNAPSHOT.jar ui --no-browser --data-dir "$RUNNER_TEMP/sdc" > ui.log 2>&1 &
+          for i in $(seq 1 30); do grep -q "token=" ui.log && break; sleep 1; done
+          url=$(grep -o 'http://127.0.0.1:[0-9]*/?token=[A-Za-z0-9_-]*' ui.log)
+          curl -sf -c cookies.txt -o /dev/null "$url"
+          curl -sf -b cookies.txt "${url%%\?*}api/status" | tee status.json
+          grep -q '"version":"2.0.0-SNAPSHOT"' status.json
+          curl -sf -b cookies.txt -H 'Content-Type: application/json' -X POST "${url%%\?*}api/shutdown"
 
       - name: Upload coverage report
         if: always()

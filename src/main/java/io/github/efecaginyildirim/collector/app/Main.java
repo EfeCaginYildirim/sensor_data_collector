@@ -4,6 +4,7 @@ import io.github.efecaginyildirim.collector.api.HttpMonitoringApi;
 import io.github.efecaginyildirim.collector.api.MonitoringApi;
 import io.github.efecaginyildirim.collector.api.RetryPolicy;
 import io.github.efecaginyildirim.collector.collect.CollectionJob;
+import io.github.efecaginyildirim.collector.collect.DailyScheduler;
 import io.github.efecaginyildirim.collector.collect.RunReport;
 import io.github.efecaginyildirim.collector.collect.SnapshotWriter;
 import io.github.efecaginyildirim.collector.config.AppConfig;
@@ -22,6 +23,11 @@ import io.github.efecaginyildirim.collector.persistence.MotorDataReader;
 import io.github.efecaginyildirim.collector.persistence.MotorDataReader.MonitorSummary;
 import io.github.efecaginyildirim.collector.persistence.MotorDataRepository;
 import io.github.efecaginyildirim.collector.time.TimeWindow;
+import io.github.efecaginyildirim.collector.ui.AppPaths;
+import io.github.efecaginyildirim.collector.ui.Browser;
+import io.github.efecaginyildirim.collector.ui.CollectorService;
+import io.github.efecaginyildirim.collector.ui.SingleInstance;
+import io.github.efecaginyildirim.collector.ui.UiServer;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -53,6 +59,7 @@ import java.util.stream.IntStream;
  *   demo       full backfill + incremental run against the built-in fake API, no setup needed
  *   benchmark  compare request concurrency levels against the fake API with artificial latency
  *   fake-api   serve the fake vendor API on a port, e.g. for trying "run" by hand
+ *   ui         the desktop app: a local web UI opened in the browser
  * </pre>
  */
 public final class Main {
@@ -94,6 +101,7 @@ public final class Main {
                 case "demo" -> demo(options, out);
                 case "benchmark" -> benchmark(options, out);
                 case "fake-api" -> fakeApi(options, out);
+                case "ui" -> ui(options, out);
                 case "help" -> {
                     usage(out);
                     yield 0;
@@ -257,6 +265,51 @@ public final class Main {
         return 0;
     }
 
+    private static int ui(Options o, PrintStream out) throws IOException, InterruptedException {
+        Path dataDirectory = o.value("data-dir").map(Path::of).orElseGet(AppPaths::defaultDataDirectory);
+        boolean openBrowser = !o.flag("no-browser");
+        Logging.configure(o.flag("verbose") ? Level.INFO : Level.WARNING, Optional.of(dataDirectory.resolve("logs")));
+
+        SingleInstance.Acquisition acquisition = SingleInstance.acquire(dataDirectory);
+        if (acquisition instanceof SingleInstance.AlreadyRunning running) {
+            if (running.launchUrl().isEmpty()) {
+                out.println("Another instance is starting with the data folder " + dataDirectory + "; try again in a moment.");
+                return 1;
+            }
+            out.println("Sensor Data Collector is already running; opening its window.");
+            if (openBrowser) {
+                Browser.open(running.launchUrl().get());
+            }
+            return 0;
+        }
+        SingleInstance instance = ((SingleInstance.Acquired) acquisition).instance();
+        CountDownLatch stop = new CountDownLatch(1);
+        CountDownLatch closed = new CountDownLatch(1);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            stop.countDown();
+            try {
+                closed.await(30, java.util.concurrent.TimeUnit.SECONDS); // let the main thread close the database
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "shutdown"));
+        try (instance;
+             CollectorService service = new CollectorService(dataDirectory, Clock.systemUTC());
+             UiServer server = UiServer.start(service, o.intOption("port", 0), stop::countDown)) {
+            instance.publish(server.launchUri());
+            out.println("Sensor Data Collector is running at " + server.baseUri());
+            out.println("Data folder: " + dataDirectory);
+            out.println("Quit from Settings > Quit app, or press Ctrl+C here.");
+            if (!openBrowser || !Browser.open(server.launchUri())) {
+                out.println("Open this link in your browser: " + server.launchUri());
+            }
+            stop.await();
+        } finally {
+            closed.countDown();
+        }
+        return 0;
+    }
+
     // ─── Wiring ──────────────────────────────────────────────────────────────────
 
     private static AppConfig loadConfig(Options o, Map<String, String> env) {
@@ -346,6 +399,7 @@ public final class Main {
               demo       Backfill + incremental run against a built-in fake API. No setup needed.
               benchmark  Compare request concurrency levels against the fake API.
               fake-api   Serve the fake vendor API (default port 8080).
+              ui         Open the desktop app in the browser (local web UI, demo mode by default).
               help       Show this text.
 
             Options:
@@ -361,6 +415,8 @@ public final class Main {
               --concurrency <list>   benchmark: levels to compare (1,2,4,8,16)
               --port <n>             fake-api: TCP port (8080)
               --host <address>       fake-api: interface to bind (127.0.0.1; use 0.0.0.0 in containers)
+              --data-dir <dir>       ui: settings and data folder (default: the platform's app-data folder)
+              --no-browser           ui: print the link instead of opening the browser
 
             Every configuration key can be overridden by an environment variable,
             e.g. api.password -> SDC_API_PASSWORD.""");
@@ -369,7 +425,7 @@ public final class Main {
     /** Minimal option parser: one command followed by {@code --name value} and {@code --flag} options. */
     record Options(String command, Map<String, String> values) {
 
-        private static final List<String> FLAGS = List.of("in-memory", "run-now", "verbose");
+        private static final List<String> FLAGS = List.of("in-memory", "run-now", "verbose", "no-browser");
 
         static Options parse(String[] args) {
             String command = null;
