@@ -1,4 +1,4 @@
--- Sensor Data Collector — SQL Server schema.
+-- Sensor Data Collector — SQL Server schema (see db/h2/schema.sql for the embedded variant).
 -- Idempotent: every statement can be re-run. Batches are separated by lines containing only GO.
 -- All DATETIME2 values are UTC.
 
@@ -108,6 +108,33 @@ CREATE TABLE dbo.collection_watermark (
                                  CONSTRAINT fk_collection_watermark_monitor REFERENCES dbo.monitor (monitor_id),
     collected_until DATETIME2(3) NOT NULL,
     updated_at      DATETIME2(3) NOT NULL
+);
+GO
+
+-- One row per collection run, for the run history shown in the UI.
+IF OBJECT_ID(N'dbo.collection_run', N'U') IS NULL
+CREATE TABLE dbo.collection_run (
+    run_id          VARCHAR(16)    NOT NULL CONSTRAINT pk_collection_run PRIMARY KEY,
+    started_at      DATETIME2(3)   NOT NULL,
+    elapsed_ms      BIGINT         NOT NULL,
+    status          VARCHAR(16)    NOT NULL,
+    failure         NVARCHAR(2000) NULL,
+    monitors_total  INT            NOT NULL,
+    monitors_failed INT            NOT NULL,
+    new_rows        INT            NOT NULL,
+    summary         NVARCHAR(MAX)  NOT NULL
+);
+GO
+
+-- Time ranges the user excluded by hand (sensor faults, maintenance). Applied when datasets are read.
+IF OBJECT_ID(N'dbo.sample_exclusion', N'U') IS NULL
+CREATE TABLE dbo.sample_exclusion (
+    exclusion_id BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT pk_sample_exclusion PRIMARY KEY,
+    monitor_id   INT           NOT NULL CONSTRAINT fk_sample_exclusion_monitor REFERENCES dbo.monitor (monitor_id),
+    from_time    DATETIME2(3)  NOT NULL,
+    to_time      DATETIME2(3)  NOT NULL,
+    reason       NVARCHAR(500) NOT NULL,
+    created_at   DATETIME2(3)  NOT NULL
 );
 GO
 

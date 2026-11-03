@@ -1,6 +1,7 @@
 # Sensor Data Collector
 
 [![CI](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/ci.yml/badge.svg)](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/ci.yml)
+[![Desktop app](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/package.yml/badge.svg)](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/package.yml)
 
 A Java 21 service that collects vibration and health data from industrial motor sensors through a
 vendor condition-monitoring API and stores it in SQL Server for a predictive-maintenance /
@@ -8,12 +9,84 @@ digital-twin pipeline.
 
 I first wrote it during an engineering internship to automate a manual export. This repository is
 a **ground-up rewrite** of that version: same purpose, but correct under failure, testable without
-the vendor, and measurably parallel. The original code is preserved in the Git history.
+the vendor, and measurably parallel. Data can go to SQL Server or to a single embedded H2 file. The original code is preserved in the Git history.
 
 ```bash
 mvn -q package -DskipTests
-java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar demo
+java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar ui     # desktop app in the browser
+java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar demo   # same idea on the console
 ```
+
+## Desktop app
+
+`ui` starts a small local web server and opens the app in the default browser. It starts in demo
+mode, so it works without credentials; switch to your vendor API in Settings.
+
+### Download and run
+
+The [releases](https://github.com/EfeCaginYildirim/sensor_data_collector/releases) page has a zip
+per platform. It contains its own trimmed Java runtime, so nothing else needs to be installed
+(about 30 MB to download, 45 MB unpacked).
+
+- **Windows**: unzip, open the `SensorDataCollector` folder and double-click
+  `SensorDataCollector.exe`. The app is not code-signed, so the first start shows *Windows
+  protected your PC*: click **More info**, then **Run anyway**.
+- **macOS** (Apple Silicon): unzip and move `SensorDataCollector.app` to Applications. The first
+  time, macOS refuses to open it because the developer is not verified: open **System Settings >
+  Privacy & Security**, scroll down and click **Open Anyway**. If macOS says the app is
+  *damaged*, it was quarantined on download; run
+  `xattr -dr com.apple.quarantine /Applications/SensorDataCollector.app` once.
+
+The app has no window of its own: it lives in the browser tab it opens, and it has no Dock or
+taskbar icon. Double-clicking it again while it runs opens the same session. To stop it, use
+**Settings > Quit app**. Logs are in the `logs` folder of the data folder shown in Settings.
+
+The packages are built and tested on GitHub's Windows and macOS runners: each one is started
+without arguments, like a double-click, then a demo collection runs and a dataset is queried over
+HTTP (`packaging/smoke-test.sh`). To build one yourself on the target OS, with a JDK 21:
+`mvn package -DskipTests && packaging/package.sh target/sensor-data-collector-*.jar 2.0.0 dist`.
+
+![Monitors view: motors grouped by machine, each with a velocity strip against its alarm thresholds and a trend chart](docs/screenshots/monitors.png)
+
+- **Monitors** — every sensor with its health score and a strip showing RMS velocity against the
+  vendor's own thresholds (normal, elevated, caution, warning), plus a trend chart of any two
+  features. The demo fleet includes two motors with a developing bearing defect.
+- **Collect** — run a collection, watch it fetch time range by time range, read the run history.
+- **Data** — choose what goes into a CSV file without touching the collected data (see below).
+- **Settings** — demo or vendor API, credentials (the password is saved in your user folder and
+  never sent back to the browser), and an optional daily schedule.
+
+### Data tab
+
+![Data tab: filters on the left, a step-by-step count of what each filter removes, a chart with an excluded range hatched, and the export controls](docs/screenshots/data.png)
+
+Pick monitors, a date range and columns (vibration features as a family-by-axis grid, so "all
+three axes of RMS velocity" is one click), then thin out the rows:
+
+- **Exclusion rules** such as *leave out rows where idle fraction is above 0.5*; a rule may use a
+  column that is not exported.
+- **Sampling**: every sample, or hourly or daily means.
+- **Only keep rows that changed**: a deadband on every selected column, in percent or absolute
+  units. Long flat stretches collapse to a few rows; each monitor's first and last rows stay.
+- **Manual exclusions**: drag across the chart to leave out a time range, for example while a
+  sensor was being serviced. Each one needs a reason, is listed with it, and can be included again.
+
+The count at the top shows what every step removes, and the chart runs the same pipeline as the
+export, so it shows exactly the rows the file will contain. Selections can be saved under a name.
+Files are written as UTF-8 CSV, comma-separated with a decimal point or semicolon-separated with a
+decimal comma for Excel in Turkish, French or German. Nothing is deleted from the database:
+filters apply at export time, and manual exclusions are stored separately with their reasons.
+
+It is deliberately light: no framework, no build step for the front end, one 50 KB chart library
+(uPlot). Data and settings live in the platform's app-data folder (`%APPDATA%\SensorDataCollector`
+on Windows, `~/Library/Application Support/SensorDataCollector` on macOS), in one embedded H2
+file per mode.
+
+The server only listens on `127.0.0.1`. The link the app opens carries a random 256-bit token,
+which is exchanged for an `HttpOnly`, `SameSite=Strict` cookie; requests with a foreign `Host`
+header (DNS rebinding), cross-origin or non-JSON writes are refused, and a strict
+Content-Security-Policy allows only the app's own scripts. Starting the app twice opens the
+running instance instead of a second server.
 
 `demo` needs no credentials or database: it starts a built-in fake of the vendor API with six
 synthetic motors (two of them developing a bearing defect), backfills 60 days, runs again "one day
@@ -80,6 +153,8 @@ flowchart LR
 | **Virtual threads + `Semaphore`** instead of a fixed thread pool | Blocking code stays readable, and the limit is expressed as what matters: in-flight requests. |
 | **Daily scheduler that recomputes the next local run time** | A fixed 24 h period drifts by an hour across DST, and `scheduleAtFixedRate` silently stops after one uncaught exception. |
 | **`run` as a one-shot command with exit codes** next to `daemon` | Lets cron / Windows Task Scheduler own scheduling, retries and alerting. |
+| **Two databases, one code path:** SQL Server for production, embedded **H2** for the desktop, the demo and tests | H2 runs in MSSQLServer mode, so inserts, deletes and selects are shared; only the DDL and two upserts differ (`SqlDialect`). The embedded store is a single file and needs no server. |
+| **Local web UI** instead of Swing/JavaFX or Electron | Modern look with no extra runtime: the JDK's HTTP server and plain HTML/JS. The browser is opened with the OS's own opener, so the packaged runtime does not need `java.desktop`. |
 | No connection pool, no logging framework, no Mockito | One writer and a few connections per day do not need a pool; `System.Logger` + JUL is enough; hand-written fakes test more than mocks. The only runtime dependencies are Jackson and the SQL Server driver. |
 
 ## Benchmark
@@ -111,17 +186,27 @@ brings its own:
   sample-by-sample with one big request.
 - **`FakeMonitoringServer`** (JDK HTTP server) serves that data and injects faults a real service
   cannot be asked for: status codes, `Retry-After`, malformed bodies, latency, token expiry.
+- **`H2RepositoryTest`** runs the repository against a real (embedded) database: idempotent saves,
+  rollback of a failed transaction, exact round-trips of values, NULLs and Unicode, reads and the
+  run history. It caught a bug the mocks could not: two runs within one second collided on the
+  status snapshot's primary key.
 - **`RecordingJdbc`** is a dynamic-proxy JDBC driver that records statements, parameters and
-  transaction boundaries, so the persistence contract (order, typed NULLs, UTC times, rollback) is
-  tested without SQL Server. `docker compose up` runs the same code against a real SQL Server.
+  transaction boundaries, which covers the SQL Server-specific statements without a server.
+  `docker compose up` runs the same code against a real SQL Server.
 
-The suite has 135 tests and runs in under 30 seconds. Examples of what it pins down:
+The suite has 207 tests and runs in under a minute. The web UI is also checked in a real browser
+(Playwright, Chromium) during development: sign-in, a full collection, the chart, settings
+validation, the Data tab end to end (rules, change filter, drag-to-exclude, CSV download, saved
+selections) and the mobile layout, with no console errors. Examples of what it pins down:
 
 - a `401` is sent once, not three times; a `503` is retried with growing backoff;
 - ten days of downtime leave no gap;
 - a failing chunk keeps only the gap-free prefix, and the next run resumes there;
 - a database error is reported as a failure (the first version reported it as "0 new rows");
-- in-flight requests never exceed the configured limit;
+- the chart of a filtered dataset has exactly as many rows as its CSV export;
+- the change filter never drops a monitor's first or last row;
+- the UI API refuses foreign `Host` headers, cross-site writes, missing sessions and path traversal;
+- in-flight requests never exceed the configured limit, and retry jitter is safe to share between them;
 - the scheduler stays at 09:00 local time across DST and survives an `Error` thrown by a run.
 
 The first commit after the original code (`test: characterize …`) adds tests that **fail** against
@@ -143,7 +228,9 @@ java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar run         # once; ex
 java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar daemon      # daily at schedule.daily-time
 ```
 
-The schema is created on first start (`src/main/resources/db/schema.sql`, idempotent).
+The schema is created on first start (`src/main/resources/db/{sqlserver,h2}/schema.sql`,
+idempotent). Without a SQL Server, set `db.url=jdbc:h2:file:./data/collector` — no credentials
+needed; six motors take roughly 5 MB per year.
 
 **Full stack in Docker** — SQL Server, the fake API and the collector daemon:
 
@@ -160,6 +247,7 @@ docker compose up --build
 | `demo` | Backfill + incremental run against the fake API (`--days`, `--monitors`, `--snapshot-dir`). |
 | `benchmark` | Compare concurrency levels (`--monitors`, `--days`, `--latency-ms`, `--concurrency 1,4,8`). |
 | `fake-api` | Serve the fake API on `--port` (default 8080), e.g. to try `run --in-memory` by hand. |
+| `ui` | Desktop app in the browser (`--data-dir`, `--port`, `--no-browser`). |
 
 ### Configuration
 
@@ -179,7 +267,7 @@ Invalid configuration is reported all at once, with every problem listed.
 | `collection.overlap` | `P3D` | Re-fetched period before the watermark |
 | `collection.chunk` | `P30D` | Longest range per request |
 | `collection.run-deadline` | `PT30M` | Time budget of one run |
-| `db.url`, `db.user`, `db.password` | — | SQL Server; omit and use `--in-memory` to try without |
+| `db.url`, `db.user`, `db.password` | — | `jdbc:sqlserver:…` (user and password required) or `jdbc:h2:file:…` (optional); omit and use `--in-memory` to try without |
 | `output.snapshot-dir` | — | Write a JSON archive of each run |
 | `output.log-dir` | — | Rotating log files (5 × 10 MB) |
 | `schedule.daily-time`, `schedule.zone` | `09:00`, `UTC` | Daemon schedule |
@@ -188,10 +276,12 @@ Invalid configuration is reported all at once, with every problem listed.
 
 ```
 src/main/java/io/github/efecaginyildirim/collector/
-├── app/          CLI, DailyScheduler, logging
-├── collect/      CollectionJob, WindowPlanner, RunReport, SnapshotWriter
+├── app/          CLI, logging
+├── ui/           UiServer, CollectorService, SettingsStore, PresetStore, ProgressTracker, SingleInstance
+├── dataset/      DatasetSpec, DatasetPipeline, ExcludeRule, ChangeFilter, Sampling, CsvWriter
+├── collect/      CollectionJob, RunListener, DailyScheduler, WindowPlanner, RunReport
 ├── api/          MonitoringApi, HttpMonitoringApi, RetryPolicy, ApiJsonMapper
-├── persistence/  MotorDataRepository, JdbcMotorDataRepository, InMemoryMotorDataRepository
+├── persistence/  MotorDataRepository / -Reader, RunHistory, JdbcMotorDataRepository, SqlDialect, H2Database
 ├── model/        Plant, MonitorInfo, BasicFeature, ComputedFeatureSample, ComputedFeature
 ├── time/         Timestamps, TimeWindow
 ├── config/       AppConfig, ConfigLoader
@@ -202,9 +292,9 @@ src/main/java/io/github/efecaginyildirim/collector/
 
 - The API contract is reconstructed; the points marked *Assumption* in `docs/API_CONTRACT.md`
   could not be verified against the real service.
-- The SQL statements are checked by the recording driver, not yet by an automated test against a
-  real SQL Server. The Docker Compose setup is there to run them for real; a Testcontainers test
-  would be the next step.
+- The shared SQL runs against H2 in the tests, but the SQL Server-specific DDL and upserts are only
+  checked by the recording driver, not yet by an automated test against a real SQL Server. The
+  Docker Compose setup is there to run them for real; a Testcontainers test would be the next step.
 - The synthetic signal model is intentionally simple — good enough to exercise the pipeline and
   show a degrading bearing, not a physical simulation.
 

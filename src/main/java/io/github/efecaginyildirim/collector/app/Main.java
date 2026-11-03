@@ -4,6 +4,7 @@ import io.github.efecaginyildirim.collector.api.HttpMonitoringApi;
 import io.github.efecaginyildirim.collector.api.MonitoringApi;
 import io.github.efecaginyildirim.collector.api.RetryPolicy;
 import io.github.efecaginyildirim.collector.collect.CollectionJob;
+import io.github.efecaginyildirim.collector.collect.DailyScheduler;
 import io.github.efecaginyildirim.collector.collect.RunReport;
 import io.github.efecaginyildirim.collector.collect.SnapshotWriter;
 import io.github.efecaginyildirim.collector.config.AppConfig;
@@ -12,12 +13,21 @@ import io.github.efecaginyildirim.collector.config.ConfigException;
 import io.github.efecaginyildirim.collector.config.ConfigLoader;
 import io.github.efecaginyildirim.collector.fakeapi.FakeMonitoringServer;
 import io.github.efecaginyildirim.collector.fakeapi.SyntheticFleet;
+import io.github.efecaginyildirim.collector.collect.RunHistoryListener;
 import io.github.efecaginyildirim.collector.model.ComputedFeature;
-import io.github.efecaginyildirim.collector.model.ComputedFeatureSample;
-import io.github.efecaginyildirim.collector.model.MonitorInfo.MonitorStatus;
-import io.github.efecaginyildirim.collector.persistence.InMemoryMotorDataRepository;
+import io.github.efecaginyildirim.collector.persistence.DatasetQuery;
+import io.github.efecaginyildirim.collector.persistence.DatasetRow;
+import io.github.efecaginyildirim.collector.persistence.H2Database;
 import io.github.efecaginyildirim.collector.persistence.JdbcMotorDataRepository;
+import io.github.efecaginyildirim.collector.persistence.MotorDataReader;
+import io.github.efecaginyildirim.collector.persistence.MotorDataReader.MonitorSummary;
 import io.github.efecaginyildirim.collector.persistence.MotorDataRepository;
+import io.github.efecaginyildirim.collector.time.TimeWindow;
+import io.github.efecaginyildirim.collector.ui.AppPaths;
+import io.github.efecaginyildirim.collector.ui.Browser;
+import io.github.efecaginyildirim.collector.ui.CollectorService;
+import io.github.efecaginyildirim.collector.ui.SingleInstance;
+import io.github.efecaginyildirim.collector.ui.UiServer;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -33,11 +43,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.concurrent.CountDownLatch;
 import java.util.logging.Level;
-import java.util.random.RandomGenerator;
 import java.util.stream.IntStream;
 
 /**
@@ -49,6 +58,7 @@ import java.util.stream.IntStream;
  *   demo       full backfill + incremental run against the built-in fake API, no setup needed
  *   benchmark  compare request concurrency levels against the fake API with artificial latency
  *   fake-api   serve the fake vendor API on a port, e.g. for trying "run" by hand
+ *   ui         the desktop app: a local web UI opened in the browser
  * </pre>
  */
 public final class Main {
@@ -90,6 +100,7 @@ public final class Main {
                 case "demo" -> demo(options, out);
                 case "benchmark" -> benchmark(options, out);
                 case "fake-api" -> fakeApi(options, out);
+                case "ui" -> ui(options, out);
                 case "help" -> {
                     usage(out);
                     yield 0;
@@ -123,21 +134,25 @@ public final class Main {
     private static int run(Options o, PrintStream out, Map<String, String> env) {
         AppConfig config = loadConfig(o, env);
         Logging.configure(o.flag("verbose") ? Level.INFO : Level.WARNING, config.output().logDirectory());
-        CollectionJob job = productionJob(config, repository(config, o));
-        RunReport report = job.run();
-        out.print(report.summary());
-        return report.status().exitCode();
+        try (JdbcMotorDataRepository repo = repository(config, o)) {
+            RunReport report = productionJob(config, repo).run(new RunHistoryListener(repo));
+            out.print(report.summary());
+            return report.status().exitCode();
+        }
     }
 
     private static int daemon(Options o, PrintStream out, Map<String, String> env) throws InterruptedException {
         AppConfig config = loadConfig(o, env);
         Logging.configure(Level.INFO, config.output().logDirectory());
-        CollectionJob job = productionJob(config, repository(config, o));
+        JdbcMotorDataRepository repo = repository(config, o);
+        CollectionJob job = productionJob(config, repo);
+        RunHistoryListener history = new RunHistoryListener(repo);
         DailyScheduler scheduler = new DailyScheduler(config.schedule().dailyRunTime(), config.schedule().zone(),
-            Clock.systemUTC(), () -> out.print(job.run().summary()));
+            Clock.systemUTC(), () -> out.print(job.run(history).summary()));
         CountDownLatch stopped = new CountDownLatch(1);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             scheduler.close();
+            repo.close();
             stopped.countDown();
         }, "shutdown"));
         scheduler.start();
@@ -160,8 +175,8 @@ public final class Main {
         List<Integer> ids = monitorIds(monitorCount);
         SyntheticFleet fleet = SyntheticFleet.create(1, ids, SyntheticFleet.Options.defaults(seed, start));
 
-        try (FakeMonitoringServer server = FakeMonitoringServer.start(fleet, clock, "demo", "demo")) {
-            InMemoryMotorDataRepository repo = new InMemoryMotorDataRepository();
+        try (FakeMonitoringServer server = FakeMonitoringServer.start(fleet, clock, "demo", "demo");
+             JdbcMotorDataRepository repo = H2Database.inMemory()) {
             CollectionConfig cc = new CollectionConfig(1, ids,
                 LocalDate.ofInstant(start.minus(Duration.ofDays(days)), ZoneOffset.UTC),
                 Duration.ofDays(3), Duration.ofDays(30), Duration.ofMinutes(5));
@@ -171,18 +186,19 @@ public final class Main {
             out.println("Fake vendor API at " + server.baseUri() + " serving " + monitorCount + " synthetic motors.");
             out.println();
             out.println("== Run 1: initial backfill of " + days + " days ==");
-            out.print(job.run().summary());
+            out.print(job.run(new RunHistoryListener(repo)).summary());
             long backfillRequests = server.requests().size();
 
             clock.advance(Duration.ofDays(1));
             server.resetRecording();
             out.println();
             out.println("== Run 2: one day later - only watermark minus 3 days overlap is fetched ==");
-            RunReport second = job.run();
+            RunReport second = job.run(new RunHistoryListener(repo));
             out.print(second.summary());
             out.printf("HTTP requests: %d for the backfill, %d for the incremental run%n%n", backfillRequests, server.requests().size());
 
             out.print(healthTable(repo, ids));
+            out.printf("Run history: %d runs stored%n", repo.recentRuns(10).size());
             return second.status().exitCode();
         }
     }
@@ -207,11 +223,15 @@ public final class Main {
             double baseline = 0;
             for (int level : levels) {
                 server.resetRecording();
-                CollectionJob job = new CollectionJob(demoApi(server), new InMemoryMotorDataRepository(), cc, level,
-                    Clock.fixed(now, ZoneOffset.UTC), Optional.empty());
-                long t0 = System.nanoTime();
-                RunReport report = job.run();
-                double seconds = (System.nanoTime() - t0) / 1e9;
+                double seconds;
+                RunReport report;
+                try (JdbcMotorDataRepository repo = H2Database.inMemory()) {
+                    CollectionJob job = new CollectionJob(demoApi(server), repo, cc, level,
+                        Clock.fixed(now, ZoneOffset.UTC), Optional.empty());
+                    long t0 = System.nanoTime();
+                    report = job.run();
+                    seconds = (System.nanoTime() - t0) / 1e9;
+                }
                 if (report.status() != RunReport.Status.SUCCESS) {
                     out.print(report.summary());
                     return 1;
@@ -244,17 +264,62 @@ public final class Main {
         return 0;
     }
 
+    private static int ui(Options o, PrintStream out) throws IOException, InterruptedException {
+        Path dataDirectory = o.value("data-dir").map(Path::of).orElseGet(AppPaths::defaultDataDirectory);
+        boolean openBrowser = !o.flag("no-browser");
+        Logging.configure(o.flag("verbose") ? Level.INFO : Level.WARNING, Optional.of(dataDirectory.resolve("logs")));
+
+        SingleInstance.Acquisition acquisition = SingleInstance.acquire(dataDirectory);
+        if (acquisition instanceof SingleInstance.AlreadyRunning running) {
+            if (running.launchUrl().isEmpty()) {
+                out.println("Another instance is starting with the data folder " + dataDirectory + "; try again in a moment.");
+                return 1;
+            }
+            out.println("Sensor Data Collector is already running; opening its window.");
+            if (openBrowser) {
+                Browser.open(running.launchUrl().get());
+            }
+            return 0;
+        }
+        SingleInstance instance = ((SingleInstance.Acquired) acquisition).instance();
+        CountDownLatch stop = new CountDownLatch(1);
+        CountDownLatch closed = new CountDownLatch(1);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            stop.countDown();
+            try {
+                closed.await(30, java.util.concurrent.TimeUnit.SECONDS); // let the main thread close the database
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "shutdown"));
+        try (instance;
+             CollectorService service = new CollectorService(dataDirectory, Clock.systemUTC());
+             UiServer server = UiServer.start(service, o.intOption("port", 0), stop::countDown)) {
+            instance.publish(server.launchUri());
+            out.println("Sensor Data Collector is running at " + server.baseUri());
+            out.println("Data folder: " + dataDirectory);
+            out.println("Quit from Settings > Quit app, or press Ctrl+C here.");
+            if (!openBrowser || !Browser.open(server.launchUri())) {
+                out.println("Open this link in your browser: " + server.launchUri());
+            }
+            stop.await();
+        } finally {
+            closed.countDown();
+        }
+        return 0;
+    }
+
     // ─── Wiring ──────────────────────────────────────────────────────────────────
 
     private static AppConfig loadConfig(Options o, Map<String, String> env) {
         return ConfigLoader.load(Path.of(o.value("config").orElse(DEFAULT_CONFIG)), env);
     }
 
-    private static MotorDataRepository repository(AppConfig config, Options o) {
+    private static JdbcMotorDataRepository repository(AppConfig config, Options o) {
         if (o.flag("in-memory")) {
-            return new InMemoryMotorDataRepository();
+            return H2Database.inMemory();
         }
-        MotorDataRepository repo = JdbcMotorDataRepository.create(config.database().orElseThrow(() -> new ConfigException(List.of(
+        JdbcMotorDataRepository repo = JdbcMotorDataRepository.create(config.database().orElseThrow(() -> new ConfigException(List.of(
             "db.url is required for this command (or pass --in-memory to try without a database)"))));
         repo.initialize();
         return repo;
@@ -268,7 +333,7 @@ public final class Main {
 
     private static MonitoringApi demoApi(FakeMonitoringServer server) {
         return new HttpMonitoringApi(server.baseUri(), "demo", "demo", HttpClient.newHttpClient(), Duration.ofSeconds(30),
-            RetryPolicy.defaults(3), Thread::sleep, RandomGenerator.getDefault());
+            RetryPolicy.defaults(3), Thread::sleep, RetryPolicy.jitter());
     }
 
     private static List<Integer> monitorIds(int count) {
@@ -287,36 +352,37 @@ public final class Main {
     }
 
     /** Compares the first and last week of key bearing indicators per monitor. */
-    static String healthTable(InMemoryMotorDataRepository repo, List<Integer> ids) {
+    static String healthTable(MotorDataReader reader, List<Integer> ids) {
         StringBuilder sb = new StringBuilder("Fleet health (first week -> last week of collected data)\n");
         sb.append(String.format("  %-6s %-24s %-7s %-22s %s%n", "id", "monitor", "health", "kurtosis X", "BPFO amplitude"));
-        for (int id : ids) {
-            List<ComputedFeatureSample> samples = repo.computedFeatures(id);
-            if (samples.isEmpty()) {
+        for (MonitorSummary m : reader.monitors()) {
+            if (!ids.contains(m.monitorId()) || m.collectedUntil().isEmpty() || m.computedSamples() == 0) {
                 continue;
             }
-            Instant first = samples.get(0).time();
-            Instant last = samples.get(samples.size() - 1).time();
-            Integer health = Optional.ofNullable(repo.statusSnapshots(id).lastEntry()).map(Entry::getValue)
-                .map(MonitorStatus::healthScore).orElse(null);
-            String name = repo.monitor(id).map(p -> p.machine().name() + " " + p.monitor().name()).orElse("?");
-            sb.append(String.format("  %-6d %-24s %-7s %-22s %s%n", id, name, health == null ? "-" : health,
-                trend(samples, ComputedFeature.KURTACCLX, first, last), trend(samples, ComputedFeature.BPFO, first, last)));
+            Instant end = m.collectedUntil().get();
+            List<DatasetRow> rows = new ArrayList<>();
+            reader.query(new DatasetQuery(List.of(m.monitorId()), new TimeWindow(Instant.EPOCH, end),
+                List.of(ComputedFeature.KURTACCLX, ComputedFeature.BPFO), OptionalInt.empty()), rows::add);
+            Instant first = rows.get(0).time();
+            Instant last = rows.get(rows.size() - 1).time();
+            Integer health = m.latestStatus().map(s -> s.status().healthScore()).orElse(null);
+            sb.append(String.format("  %-6d %-24s %-7s %-22s %s%n", m.monitorId(), m.machineName() + " " + m.monitorName(),
+                health == null ? "-" : health, trend(rows, 0, first, last), trend(rows, 1, first, last)));
         }
         return sb.toString();
     }
 
-    private static String trend(List<ComputedFeatureSample> samples, ComputedFeature f, Instant first, Instant last) {
-        double early = mean(samples, f, first, first.plus(Duration.ofDays(7)));
-        double late = mean(samples, f, last.minus(Duration.ofDays(7)), last.plusSeconds(1));
+    private static String trend(List<DatasetRow> rows, int column, Instant first, Instant last) {
+        double early = mean(rows, column, first, first.plus(Duration.ofDays(7)));
+        double late = mean(rows, column, last.minus(Duration.ofDays(7)), last.plusSeconds(1));
         String arrow = late > early * 1.25 ? "  RISING" : late < early * 0.8 ? "  FALLING" : "";
         return String.format("%.2f -> %.2f%s", early, late, arrow);
     }
 
-    private static double mean(List<ComputedFeatureSample> samples, ComputedFeature f, Instant from, Instant to) {
-        return samples.stream()
-            .filter(s -> !s.time().isBefore(from) && s.time().isBefore(to))
-            .map(s -> s.value(f))
+    private static double mean(List<DatasetRow> rows, int column, Instant from, Instant to) {
+        return rows.stream()
+            .filter(r -> !r.time().isBefore(from) && r.time().isBefore(to))
+            .map(r -> r.value(column))
             .filter(v -> v.isPresent())
             .mapToDouble(v -> v.getAsDouble())
             .average().orElse(Double.NaN);
@@ -332,6 +398,7 @@ public final class Main {
               demo       Backfill + incremental run against a built-in fake API. No setup needed.
               benchmark  Compare request concurrency levels against the fake API.
               fake-api   Serve the fake vendor API (default port 8080).
+              ui         Open the desktop app in the browser (local web UI, demo mode by default).
               help       Show this text.
 
             Options:
@@ -347,6 +414,8 @@ public final class Main {
               --concurrency <list>   benchmark: levels to compare (1,2,4,8,16)
               --port <n>             fake-api: TCP port (8080)
               --host <address>       fake-api: interface to bind (127.0.0.1; use 0.0.0.0 in containers)
+              --data-dir <dir>       ui: settings and data folder (default: the platform's app-data folder)
+              --no-browser           ui: print the link instead of opening the browser
 
             Every configuration key can be overridden by an environment variable,
             e.g. api.password -> SDC_API_PASSWORD.""");
@@ -355,7 +424,7 @@ public final class Main {
     /** Minimal option parser: one command followed by {@code --name value} and {@code --flag} options. */
     record Options(String command, Map<String, String> values) {
 
-        private static final List<String> FLAGS = List.of("in-memory", "run-now", "verbose");
+        private static final List<String> FLAGS = List.of("in-memory", "run-now", "verbose", "no-browser");
 
         static Options parse(String[] args) {
             String command = null;

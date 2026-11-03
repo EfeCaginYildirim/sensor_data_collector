@@ -25,7 +25,7 @@ class JdbcMotorDataRepositoryTest {
     final RecordingJdbc jdbc = new RecordingJdbc();
 
     JdbcMotorDataRepository repository(int batchSize) {
-        return new JdbcMotorDataRepository(jdbc.factory(), batchSize);
+        return new JdbcMotorDataRepository(jdbc.factory(), SqlDialect.SQL_SERVER, batchSize);
     }
 
     @Test
@@ -35,6 +35,7 @@ class JdbcMotorDataRepositoryTest {
         assertEquals(List.of(
             "autoCommit=false",
             "prepare MERGE dbo.monitor WITH", "executeUpdate MERGE dbo.monitor WITH",
+            "prepare DELETE FROM dbo.monitor_status", "executeUpdate DELETE FROM dbo.monitor_status",
             "prepare INSERT INTO dbo.monitor_status", "executeUpdate INSERT INTO dbo.monitor_status",
             "prepare DELETE FROM dbo.basic_feature", "executeUpdate DELETE FROM dbo.basic_feature",
             "prepare INSERT INTO dbo.basic_feature", "executeBatch 2",
@@ -83,7 +84,7 @@ class JdbcMotorDataRepositoryTest {
         assertEquals(new SqlNull(Types.DOUBLE), computed.params().get(taIndex));
 
         Execution status = jdbc.executions("update").stream()
-            .filter(e -> e.sql().contains("monitor_status")).findFirst().orElseThrow();
+            .filter(e -> e.sql().startsWith("INSERT INTO dbo.monitor_status")).findFirst().orElseThrow();
         assertEquals(87, status.params().get(3), "health_score");
         assertEquals(new SqlNull(Types.INTEGER), status.params().get(6), "alarms unknown");
         assertEquals(new SqlNull(Types.DOUBLE), status.params().get(12), "velocity_y unknown");
@@ -133,8 +134,8 @@ class JdbcMotorDataRepositoryTest {
     void initializeRunsEverySchemaBatchWithAutoCommit() {
         repository(1000).initialize();
 
-        List<String> batches = JdbcMotorDataRepository.schemaBatches();
-        assertEquals(6, batches.size(), "5 tables + 1 view");
+        List<String> batches = JdbcMotorDataRepository.schemaBatches(SqlDialect.SQL_SERVER.schemaResource());
+        assertEquals(8, batches.size(), "7 tables + 1 view");
         assertEquals(batches, jdbc.executions("execute").stream().map(Execution::sql).toList());
         assertTrue(batches.stream().noneMatch(b -> b.lines().anyMatch(l -> l.strip().equalsIgnoreCase("GO"))));
         assertTrue(batches.get(batches.size() - 1).startsWith("-- Convenience view"));
@@ -142,14 +143,20 @@ class JdbcMotorDataRepositoryTest {
 
     @Test
     void schemaColumnsMatchTheComputedFeatureEnum() {
-        String table = JdbcMotorDataRepository.schemaBatches().stream()
-            .filter(b -> b.contains("CREATE TABLE dbo.computed_feature")).findFirst().orElseThrow();
-        Matcher m = Pattern.compile("^\\s+\\[?([a-z]+)]?\\s+FLOAT NULL", Pattern.MULTILINE).matcher(table);
+        for (SqlDialect dialect : SqlDialect.values()) {
+            assertComputedColumnsMatchEnum(dialect);
+        }
+    }
+
+    private static void assertComputedColumnsMatchEnum(SqlDialect dialect) {
+        String table = JdbcMotorDataRepository.schemaBatches(dialect.schemaResource()).stream()
+            .filter(b -> b.contains("CREATE TABLE") && b.contains("dbo.computed_feature (")).findFirst().orElseThrow();
+        Matcher m = Pattern.compile("^\\s+\\[?([a-z]+)]?\\s+(FLOAT NULL|DOUBLE PRECISION)", Pattern.MULTILINE).matcher(table);
         List<String> columns = new java.util.ArrayList<>();
         while (m.find()) {
             columns.add(m.group(1));
         }
-        assertEquals(Arrays.stream(ComputedFeature.values()).map(ComputedFeature::column).toList(), columns);
+        assertEquals(Arrays.stream(ComputedFeature.values()).map(ComputedFeature::column).toList(), columns, dialect.name());
         assertTrue(table.contains("[load]"), "LOAD is a reserved word in T-SQL and must be quoted");
     }
 

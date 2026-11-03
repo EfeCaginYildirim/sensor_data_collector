@@ -105,7 +105,7 @@ public final class HttpMonitoringApi implements MonitoringApi {
             .build();
         return new HttpMonitoringApi(config.baseUri(), config.username(), config.password(), http,
             config.requestTimeout(), RetryPolicy.defaults(config.maxAttempts()), Thread::sleep,
-            RandomGenerator.getDefault());
+            RetryPolicy.jitter());
     }
 
     @Override

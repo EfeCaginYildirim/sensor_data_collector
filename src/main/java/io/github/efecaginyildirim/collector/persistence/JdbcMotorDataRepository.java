@@ -8,6 +8,7 @@ import io.github.efecaginyildirim.collector.model.MonitorInfo;
 import io.github.efecaginyildirim.collector.model.MonitorInfo.MonitorStatus;
 import io.github.efecaginyildirim.collector.model.MonitorInfo.Reading;
 import io.github.efecaginyildirim.collector.model.Plant.MonitorPlacement;
+import io.github.efecaginyildirim.collector.time.TimeWindow;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -19,40 +20,45 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
- * {@link MotorDataRepository} for Microsoft SQL Server over plain JDBC.
+ * {@link MotorDataRepository}, {@link MotorDataReader} and {@link RunHistory} over plain JDBC,
+ * for Microsoft SQL Server and embedded H2 (see {@link SqlDialect}).
  *
  * <h2>Write strategy</h2>
  * A save runs in one transaction:
  * <ol>
- *   <li>upsert the monitor row ({@code MERGE ... WITH (HOLDLOCK)}, single row);</li>
- *   <li>insert the status snapshot;</li>
+ *   <li>upsert the monitor row;</li>
+ *   <li>replace the status snapshot taken at the batch's collection time;</li>
  *   <li>{@code DELETE} the samples inside the window (a primary-key range seek) and batch-insert
  *       the new ones;</li>
  *   <li>advance the watermark, never moving it backwards.</li>
  * </ol>
  * Replacing the window instead of merging row by row keeps the statements simple, index-friendly
- * and idempotent. With {@code useBulkCopyForBatchInsert=true} in the JDBC URL, the driver turns
- * the batched inserts into bulk-copy operations.
+ * and idempotent. On SQL Server, {@code useBulkCopyForBatchInsert=true} in the JDBC URL turns the
+ * batched inserts into bulk-copy operations.
  *
  * <h2>Connections</h2>
  * The collector writes from a single thread, a handful of times per run, so it opens one
- * connection per operation instead of maintaining a pool. A pool (e.g. HikariCP) can be plugged
- * in through {@link ConnectionFactory} if the access pattern changes.
+ * connection per operation instead of maintaining a pool. For H2 the database is kept open
+ * between connections and shut down by {@link #close()}.
  *
- * <p>All timestamps are stored as UTC {@code DATETIME2}.
+ * <p>All timestamps are stored as UTC.
  */
-public final class JdbcMotorDataRepository implements MotorDataRepository {
+public final class JdbcMotorDataRepository implements MotorDataRepository, MotorDataReader, RunHistory, ExclusionStore,
+    AutoCloseable {
 
     /** Supplies JDBC connections; each call returns a new connection owned by the caller. */
     @FunctionalInterface
@@ -64,34 +70,17 @@ public final class JdbcMotorDataRepository implements MotorDataRepository {
         Connection open() throws SQLException;
     }
 
-    static final String SCHEMA_RESOURCE = "/db/schema.sql";
+    static final String STATUS_COLUMNS = "health_score, status, trend, alarms, speed, "
+        + "velocity_x, velocity_x_operational, velocity_x_caution, velocity_x_warning, "
+        + "velocity_y, velocity_y_operational, velocity_y_caution, velocity_y_warning, "
+        + "velocity_z, velocity_z_operational, velocity_z_caution, velocity_z_warning, "
+        + "temperature, temperature_operational, temperature_caution, temperature_warning";
 
-    static final String UPSERT_MONITOR = """
-        MERGE dbo.monitor WITH (HOLDLOCK) AS t
-        USING (SELECT ? AS monitor_id, ? AS plant_id, ? AS area_id, ? AS area_name, ? AS machine_group_id,
-                      ? AS machine_group_name, ? AS machine_id, ? AS machine_name, ? AS monitor_name,
-                      ? AS device_identifier, ? AS orientation_code, ? AS updated_at) AS s
-           ON t.monitor_id = s.monitor_id
-        WHEN MATCHED THEN UPDATE SET
-             plant_id = s.plant_id, area_id = s.area_id, area_name = s.area_name,
-             machine_group_id = s.machine_group_id, machine_group_name = s.machine_group_name,
-             machine_id = s.machine_id, machine_name = s.machine_name, monitor_name = s.monitor_name,
-             device_identifier = s.device_identifier, orientation_code = s.orientation_code,
-             updated_at = s.updated_at
-        WHEN NOT MATCHED THEN INSERT
-             (monitor_id, plant_id, area_id, area_name, machine_group_id, machine_group_name,
-              machine_id, machine_name, monitor_name, device_identifier, orientation_code, updated_at)
-             VALUES (s.monitor_id, s.plant_id, s.area_id, s.area_name, s.machine_group_id, s.machine_group_name,
-              s.machine_id, s.machine_name, s.monitor_name, s.device_identifier, s.orientation_code, s.updated_at);""";
+    static final String INSERT_STATUS = "INSERT INTO dbo.monitor_status (monitor_id, collected_at, " + STATUS_COLUMNS
+        + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-    static final String INSERT_STATUS = """
-        INSERT INTO dbo.monitor_status
-          (monitor_id, collected_at, health_score, status, trend, alarms, speed,
-           velocity_x, velocity_x_operational, velocity_x_caution, velocity_x_warning,
-           velocity_y, velocity_y_operational, velocity_y_caution, velocity_y_warning,
-           velocity_z, velocity_z_operational, velocity_z_caution, velocity_z_warning,
-           temperature, temperature_operational, temperature_caution, temperature_warning)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""";
+    /** Replacing a snapshot taken at the same instant keeps two runs within one second from colliding. */
+    static final String DELETE_STATUS = "DELETE FROM dbo.monitor_status WHERE monitor_id = ? AND collected_at = ?";
 
     static final String DELETE_BASIC =
         "DELETE FROM dbo.basic_feature WHERE monitor_id = ? AND sample_time >= ? AND sample_time < ?";
@@ -104,53 +93,96 @@ public final class JdbcMotorDataRepository implements MotorDataRepository {
 
     /** Generated from {@link ComputedFeature} so the column list cannot drift from the enum. */
     static final String INSERT_COMPUTED = "INSERT INTO dbo.computed_feature (monitor_id, sample_time, "
-        + Arrays.stream(ComputedFeature.values()).map(f -> "[" + f.column() + "]").collect(Collectors.joining(", "))
+        + columns(Arrays.asList(ComputedFeature.values()))
         + ") VALUES (?, ?" + ", ?".repeat(ComputedFeature.values().length) + ")";
-
-    static final String UPSERT_WATERMARK = """
-        MERGE dbo.collection_watermark WITH (HOLDLOCK) AS t
-        USING (SELECT ? AS monitor_id, ? AS collected_until, ? AS updated_at) AS s
-           ON t.monitor_id = s.monitor_id
-        WHEN MATCHED THEN UPDATE SET
-             collected_until = CASE WHEN s.collected_until > t.collected_until THEN s.collected_until ELSE t.collected_until END,
-             updated_at = s.updated_at
-        WHEN NOT MATCHED THEN INSERT (monitor_id, collected_until, updated_at)
-             VALUES (s.monitor_id, s.collected_until, s.updated_at);""";
 
     static final String SELECT_WATERMARK =
         "SELECT collected_until FROM dbo.collection_watermark WHERE monitor_id = ?";
 
+    static final String SELECT_MONITORS = "SELECT m.monitor_id, m.plant_id, m.area_name, m.machine_group_name, "
+        + "m.machine_name, m.monitor_name, w.collected_until, "
+        + "(SELECT COUNT(*) FROM dbo.basic_feature b WHERE b.monitor_id = m.monitor_id), "
+        + "(SELECT COUNT(*) FROM dbo.computed_feature c WHERE c.monitor_id = m.monitor_id), "
+        + "s.collected_at, " + prefixed("s.", STATUS_COLUMNS) + " "
+        + "FROM dbo.monitor m "
+        + "LEFT JOIN dbo.collection_watermark w ON w.monitor_id = m.monitor_id "
+        + "LEFT JOIN dbo.monitor_status s ON s.monitor_id = m.monitor_id AND s.collected_at = "
+        + "(SELECT MAX(x.collected_at) FROM dbo.monitor_status x WHERE x.monitor_id = m.monitor_id) "
+        + "ORDER BY m.monitor_id";
+
+    static final String SELECT_STATUS_HISTORY = "SELECT collected_at, " + STATUS_COLUMNS
+        + " FROM dbo.monitor_status WHERE monitor_id = ? ORDER BY collected_at DESC OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY";
+
+    static final String SELECT_BASIC = "SELECT sample_time, source_id, json_avg, json_min, json_max FROM dbo.basic_feature "
+        + "WHERE monitor_id = ? AND sample_time >= ? AND sample_time < ? ORDER BY sample_time";
+
+    static final String INSERT_RUN = "INSERT INTO dbo.collection_run (run_id, started_at, elapsed_ms, status, failure, "
+        + "monitors_total, monitors_failed, new_rows, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+    static final String SELECT_RUNS = "SELECT run_id, started_at, elapsed_ms, status, failure, monitors_total, "
+        + "monitors_failed, new_rows, summary FROM dbo.collection_run ORDER BY started_at DESC, run_id "
+        + "OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY";
+
+    static final String INSERT_EXCLUSION = "INSERT INTO dbo.sample_exclusion (monitor_id, from_time, to_time, reason, created_at) "
+        + "VALUES (?, ?, ?, ?, ?)";
+
+    static final String DELETE_EXCLUSION = "DELETE FROM dbo.sample_exclusion WHERE exclusion_id = ?";
+
+    static final String SELECT_EXCLUSIONS = "SELECT exclusion_id, monitor_id, from_time, to_time, reason, created_at "
+        + "FROM dbo.sample_exclusion";
+
     private final ConnectionFactory connections;
+    private final SqlDialect dialect;
     private final int batchSize;
+    private final Runnable onClose;
 
     /**
      * @param connections source of connections
+     * @param dialect     SQL dialect of the database behind {@code connections}
      * @param batchSize   rows per JDBC batch; must be positive
      */
-    public JdbcMotorDataRepository(ConnectionFactory connections, int batchSize) {
+    public JdbcMotorDataRepository(ConnectionFactory connections, SqlDialect dialect, int batchSize) {
+        this(connections, dialect, batchSize, () -> { });
+    }
+
+    JdbcMotorDataRepository(ConnectionFactory connections, SqlDialect dialect, int batchSize, Runnable onClose) {
         this.connections = Objects.requireNonNull(connections, "connections");
+        this.dialect = Objects.requireNonNull(dialect, "dialect");
         if (batchSize <= 0) {
             throw new IllegalArgumentException("batchSize must be positive");
         }
         this.batchSize = batchSize;
+        this.onClose = Objects.requireNonNull(onClose, "onClose");
     }
 
     /**
-     * Creates a repository that connects through {@link DriverManager}.
+     * Creates a repository from configuration; the dialect follows the JDBC URL.
+     * H2 URLs are completed with the settings the shared SQL needs (see {@link H2Database}).
      *
      * @param config database settings
-     * @return the repository
+     * @return the repository; call {@link #initialize()} before use
      */
     public static JdbcMotorDataRepository create(DatabaseConfig config) {
+        SqlDialect dialect = SqlDialect.fromJdbcUrl(config.jdbcUrl());
+        if (dialect == SqlDialect.H2) {
+            return H2Database.open(config.jdbcUrl(), config.user(), config.password());
+        }
         return new JdbcMotorDataRepository(
-            () -> DriverManager.getConnection(config.jdbcUrl(), config.user(), config.password()), 1_000);
+            () -> DriverManager.getConnection(config.jdbcUrl(), config.user(), config.password()), dialect, 1_000);
     }
+
+    /** @return the dialect in use */
+    public SqlDialect dialect() {
+        return dialect;
+    }
+
+    // ─── Schema ──────────────────────────────────────────────────────────────────
 
     @Override
     public void initialize() {
         try (Connection c = connections.open(); Statement s = c.createStatement()) {
             c.setAutoCommit(true);
-            for (String batch : schemaBatches()) {
+            for (String batch : schemaBatches(dialect.schemaResource())) {
                 s.execute(batch);
             }
         } catch (SQLException e) {
@@ -158,16 +190,14 @@ public final class JdbcMotorDataRepository implements MotorDataRepository {
         }
     }
 
+    // ─── Writes ──────────────────────────────────────────────────────────────────
+
     @Override
     public Optional<Instant> watermark(int monitorId) {
         try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(SELECT_WATERMARK)) {
             ps.setInt(1, monitorId);
             try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    return Optional.empty();
-                }
-                LocalDateTime value = rs.getObject(1, LocalDateTime.class);
-                return Optional.ofNullable(value).map(v -> v.toInstant(ZoneOffset.UTC));
+                return rs.next() ? Optional.ofNullable(instant(rs, 1)) : Optional.empty();
             }
         } catch (SQLException e) {
             throw new PersistenceException("reading the watermark of monitor " + monitorId + " failed", e);
@@ -228,7 +258,7 @@ public final class JdbcMotorDataRepository implements MotorDataRepository {
             flush(ps, pending);
         }
 
-        try (PreparedStatement ps = c.prepareStatement(UPSERT_WATERMARK)) {
+        try (PreparedStatement ps = c.prepareStatement(dialect.upsertWatermark())) {
             ps.setInt(1, id);
             ps.setObject(2, utc(batch.window().end()));
             ps.setObject(3, utc(batch.collectedAt()));
@@ -237,9 +267,9 @@ public final class JdbcMotorDataRepository implements MotorDataRepository {
         return new SaveResult(batch.basic().size(), basicReplaced, batch.computed().size(), computedReplaced);
     }
 
-    private static void upsertMonitor(Connection c, MonitorPlacement p, Instant now) throws SQLException {
+    private void upsertMonitor(Connection c, MonitorPlacement p, Instant now) throws SQLException {
         MonitorInfo m = p.monitor();
-        try (PreparedStatement ps = c.prepareStatement(UPSERT_MONITOR)) {
+        try (PreparedStatement ps = c.prepareStatement(dialect.upsertMonitor())) {
             ps.setInt(1, m.id());
             ps.setInt(2, p.plantId());
             ps.setInt(3, p.area().id());
@@ -257,6 +287,11 @@ public final class JdbcMotorDataRepository implements MotorDataRepository {
     }
 
     private static void insertStatus(Connection c, int monitorId, Instant collectedAt, MonitorStatus s) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(DELETE_STATUS)) {
+            ps.setInt(1, monitorId);
+            ps.setObject(2, utc(collectedAt));
+            ps.executeUpdate();
+        }
         try (PreparedStatement ps = c.prepareStatement(INSERT_STATUS)) {
             int i = 1;
             ps.setInt(i++, monitorId);
@@ -299,6 +334,242 @@ public final class JdbcMotorDataRepository implements MotorDataRepository {
         }
     }
 
+    // ─── Reads ───────────────────────────────────────────────────────────────────
+
+    @Override
+    public List<MonitorSummary> monitors() {
+        try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(SELECT_MONITORS);
+             ResultSet rs = ps.executeQuery()) {
+            List<MonitorSummary> out = new ArrayList<>();
+            while (rs.next()) {
+                Instant statusTime = instant(rs, 10);
+                Optional<StatusSnapshot> latest = statusTime == null ? Optional.empty()
+                    : Optional.of(new StatusSnapshot(statusTime, readStatus(rs, 11)));
+                out.add(new MonitorSummary(rs.getInt(1), rs.getInt(2), rs.getString(3), rs.getString(4),
+                    rs.getString(5), rs.getString(6), Optional.ofNullable(instant(rs, 7)), latest,
+                    rs.getLong(8), rs.getLong(9)));
+            }
+            return out;
+        } catch (SQLException e) {
+            throw new PersistenceException("listing monitors failed", e);
+        }
+    }
+
+    @Override
+    public List<StatusSnapshot> statusHistory(int monitorId, int limit) {
+        requirePositive(limit);
+        try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(SELECT_STATUS_HISTORY)) {
+            ps.setInt(1, monitorId);
+            ps.setInt(2, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<StatusSnapshot> out = new ArrayList<>();
+                while (rs.next()) {
+                    out.add(new StatusSnapshot(instant(rs, 1), readStatus(rs, 2)));
+                }
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new PersistenceException("reading the status history of monitor " + monitorId + " failed", e);
+        }
+    }
+
+    @Override
+    public List<BasicFeature> basicFeatures(int monitorId, TimeWindow window) {
+        try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(SELECT_BASIC)) {
+            ps.setInt(1, monitorId);
+            ps.setObject(2, utc(window.start()));
+            ps.setObject(3, utc(window.end()));
+            try (ResultSet rs = ps.executeQuery()) {
+                List<BasicFeature> out = new ArrayList<>();
+                while (rs.next()) {
+                    out.add(new BasicFeature(instant(rs, 1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)));
+                }
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new PersistenceException("reading basic features of monitor " + monitorId + " failed", e);
+        }
+    }
+
+    @Override
+    public long query(DatasetQuery query, Consumer<DatasetRow> sink) {
+        String sql = datasetSql(query);
+        try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(sql)) {
+            int i = 1;
+            for (int id : query.monitorIds()) {
+                ps.setInt(i++, id);
+            }
+            ps.setObject(i++, utc(query.window().start()));
+            ps.setObject(i++, utc(query.window().end()));
+            if (query.limit().isPresent()) {
+                ps.setInt(i, query.limit().getAsInt());
+            }
+            ps.setFetchSize(1_000);
+            long rows = 0;
+            int width = query.features().size();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    List<Double> values = new ArrayList<>(width);
+                    for (int col = 0; col < width; col++) {
+                        values.add(rs.getObject(3 + col, Double.class));
+                    }
+                    sink.accept(new DatasetRow(rs.getInt(1), instant(rs, 2), values));
+                    rows++;
+                }
+            }
+            return rows;
+        } catch (SQLException e) {
+            throw new PersistenceException("dataset query failed", e);
+        }
+    }
+
+    /**
+     * Builds the dataset SELECT. Column names come only from {@link ComputedFeature}; every value
+     * is a bind parameter.
+     */
+    static String datasetSql(DatasetQuery query) {
+        return "SELECT monitor_id, sample_time, " + columns(query.features())
+            + " FROM dbo.computed_feature WHERE monitor_id IN ("
+            + String.join(", ", Collections.nCopies(query.monitorIds().size(), "?"))
+            + ") AND sample_time >= ? AND sample_time < ? ORDER BY monitor_id, sample_time"
+            + (query.limit().isPresent() ? " OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY" : "");
+    }
+
+    // ─── Run history ─────────────────────────────────────────────────────────────
+
+    @Override
+    public void record(RunRecord run) {
+        try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(INSERT_RUN)) {
+            c.setAutoCommit(true);
+            ps.setString(1, run.runId());
+            ps.setObject(2, utc(run.startedAt()));
+            ps.setLong(3, run.elapsed().toMillis());
+            ps.setString(4, run.status());
+            ps.setString(5, run.failure().map(f -> f.length() > 2000 ? f.substring(0, 2000) : f).orElse(null));
+            ps.setInt(6, run.monitorsTotal());
+            ps.setInt(7, run.monitorsFailed());
+            ps.setInt(8, run.newRows());
+            ps.setString(9, run.summary());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new PersistenceException("recording run " + run.runId() + " failed", e);
+        }
+    }
+
+    @Override
+    public List<RunRecord> recentRuns(int limit) {
+        requirePositive(limit);
+        try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(SELECT_RUNS)) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<RunRecord> out = new ArrayList<>();
+                while (rs.next()) {
+                    out.add(new RunRecord(rs.getString(1), instant(rs, 2), Duration.ofMillis(rs.getLong(3)),
+                        rs.getString(4), Optional.ofNullable(rs.getString(5)), rs.getInt(6), rs.getInt(7),
+                        rs.getInt(8), rs.getString(9)));
+                }
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new PersistenceException("reading the run history failed", e);
+        }
+    }
+
+    // ─── Manual exclusions ───────────────────────────────────────────────────────
+
+    @Override
+    public SampleExclusion addExclusion(int monitorId, TimeWindow window, String reason, Instant now) {
+        String text = reason == null ? "" : reason.strip();
+        if (text.isEmpty() || text.length() > 500) {
+            throw new IllegalArgumentException("give a reason of 1 to 500 characters");
+        }
+        try (Connection c = connections.open();
+             PreparedStatement ps = c.prepareStatement(INSERT_EXCLUSION, Statement.RETURN_GENERATED_KEYS)) {
+            c.setAutoCommit(true);
+            ps.setInt(1, monitorId);
+            ps.setObject(2, utc(window.start()));
+            ps.setObject(3, utc(window.end()));
+            ps.setString(4, text);
+            ps.setObject(5, utc(now));
+            ps.executeUpdate();
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                if (!keys.next()) {
+                    throw new SQLException("no generated key returned");
+                }
+                return new SampleExclusion(keys.getLong(1), monitorId, window, text, now);
+            }
+        } catch (SQLException e) {
+            if (e.getSQLState() != null && e.getSQLState().startsWith("23")) {
+                throw new IllegalArgumentException("monitor " + monitorId + " has no collected data", e);
+            }
+            throw new PersistenceException("adding an exclusion for monitor " + monitorId + " failed", e);
+        }
+    }
+
+    @Override
+    public boolean removeExclusion(long id) {
+        try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(DELETE_EXCLUSION)) {
+            c.setAutoCommit(true);
+            ps.setLong(1, id);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            throw new PersistenceException("removing exclusion " + id + " failed", e);
+        }
+    }
+
+    @Override
+    public List<SampleExclusion> exclusions(List<Integer> monitorIds) {
+        String sql = SELECT_EXCLUSIONS
+            + (monitorIds.isEmpty() ? "" : " WHERE monitor_id IN (" + String.join(", ", Collections.nCopies(monitorIds.size(), "?")) + ")")
+            + " ORDER BY monitor_id, from_time, exclusion_id";
+        try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(sql)) {
+            for (int i = 0; i < monitorIds.size(); i++) {
+                ps.setInt(i + 1, monitorIds.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                List<SampleExclusion> out = new ArrayList<>();
+                while (rs.next()) {
+                    out.add(new SampleExclusion(rs.getLong(1), rs.getInt(2), new TimeWindow(instant(rs, 3), instant(rs, 4)),
+                        rs.getString(5), instant(rs, 6)));
+                }
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new PersistenceException("listing exclusions failed", e);
+        }
+    }
+
+    /** Releases the database; for embedded H2 this shuts it down. */
+    @Override
+    public void close() {
+        onClose.run();
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+    private static MonitorStatus readStatus(ResultSet rs, int first) throws SQLException {
+        int i = first;
+        Integer health = rs.getObject(i++, Integer.class);
+        Integer status = rs.getObject(i++, Integer.class);
+        Integer trend = rs.getObject(i++, Integer.class);
+        Integer alarms = rs.getObject(i++, Integer.class);
+        Double speed = rs.getObject(i++, Double.class);
+        Reading[] readings = new Reading[4];
+        for (int r = 0; r < 4; r++) {
+            readings[r] = new Reading(rs.getObject(i++, Double.class), rs.getObject(i++, Double.class),
+                rs.getObject(i++, Double.class), rs.getObject(i++, Double.class));
+        }
+        return new MonitorStatus(health, status, trend, alarms, speed, readings[0], readings[1], readings[2], readings[3]);
+    }
+
+    private static String columns(List<ComputedFeature> features) {
+        return features.stream().map(f -> "[" + f.column() + "]").collect(Collectors.joining(", "));
+    }
+
+    private static String prefixed(String prefix, String columnList) {
+        return Arrays.stream(columnList.split(",\\s*")).map(c -> prefix + c).collect(Collectors.joining(", "));
+    }
+
     private static void setDouble(PreparedStatement ps, int index, Double value) throws SQLException {
         if (value == null) {
             ps.setNull(index, Types.DOUBLE);
@@ -319,6 +590,17 @@ public final class JdbcMotorDataRepository implements MotorDataRepository {
         return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 
+    private static Instant instant(ResultSet rs, int index) throws SQLException {
+        LocalDateTime value = rs.getObject(index, LocalDateTime.class);
+        return value == null ? null : value.toInstant(ZoneOffset.UTC);
+    }
+
+    private static void requirePositive(int limit) {
+        if (limit <= 0) {
+            throw new IllegalArgumentException("limit must be positive");
+        }
+    }
+
     private static void rollbackQuietly(Connection c, Exception cause) {
         try {
             c.rollback();
@@ -328,19 +610,20 @@ public final class JdbcMotorDataRepository implements MotorDataRepository {
     }
 
     /**
-     * Splits the schema script into batches at lines consisting of {@code GO}.
+     * Splits a schema script into batches at lines consisting of {@code GO}.
      *
+     * @param resource classpath resource of the script
      * @return non-empty SQL batches in file order
      */
-    static List<String> schemaBatches() {
+    static List<String> schemaBatches(String resource) {
         String script;
-        try (InputStream in = JdbcMotorDataRepository.class.getResourceAsStream(SCHEMA_RESOURCE)) {
+        try (InputStream in = JdbcMotorDataRepository.class.getResourceAsStream(resource)) {
             if (in == null) {
-                throw new IllegalStateException("missing classpath resource " + SCHEMA_RESOURCE);
+                throw new IllegalStateException("missing classpath resource " + resource);
             }
             script = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new IllegalStateException("cannot read " + SCHEMA_RESOURCE, e);
+            throw new IllegalStateException("cannot read " + resource, e);
         }
         List<String> batches = new ArrayList<>();
         StringBuilder current = new StringBuilder();

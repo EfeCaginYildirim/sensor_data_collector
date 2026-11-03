@@ -98,20 +98,37 @@ public final class CollectionJob {
     }
 
     /**
-     * Executes one run. Never throws for API or storage failures; they are reported per monitor.
+     * Executes one run without progress reporting.
      *
      * @return the run report
      * @throws IllegalStateException if another run of this job is in progress
+     * @see #run(RunListener)
      */
     public RunReport run() {
+        return run(RunListener.NONE);
+    }
+
+    /**
+     * Executes one run. Never throws for API or storage failures; they are reported per monitor.
+     *
+     * @param listener receives progress events; exceptions it throws are logged and ignored
+     * @return the run report
+     * @throws IllegalStateException if another run of this job is in progress
+     */
+    public RunReport run(RunListener listener) {
         if (!running.compareAndSet(false, true)) {
             throw new IllegalStateException("a collection run is already in progress");
         }
         try {
-            return doRun();
+            return doRun(new SafeListener(Objects.requireNonNull(listener, "listener")));
         } finally {
             running.set(false);
         }
+    }
+
+    /** @return whether a run is in progress */
+    public boolean isRunning() {
+        return running.get();
     }
 
     // ─── Internals ───────────────────────────────────────────────────────────────
@@ -132,11 +149,12 @@ public final class CollectionJob {
 
     private record MonitorFetch(MonitorPlan plan, List<ChunkResult> chunks, Throwable error) { }
 
-    private RunReport doRun() {
+    private RunReport doRun(SafeListener listener) {
         String runId = UUID.randomUUID().toString().substring(0, 8);
         long startNanos = System.nanoTime();
         Instant now = clock.instant().truncatedTo(ChronoUnit.SECONDS);
         LOG.log(System.Logger.Level.INFO, () -> "Run " + runId + " started for " + config.monitorIds().size() + " monitors");
+        listener.runStarted(runId, now, config.monitorIds());
 
         Plant plant;
         try {
@@ -146,7 +164,8 @@ public final class CollectionJob {
             List<MonitorOutcome> outcomes = config.monitorIds().stream()
                 .map(id -> MonitorOutcome.failed(id, Optional.empty(), Optional.empty(), "plant hierarchy unavailable"))
                 .toList();
-            return finish(runId, now, startNanos, Status.FAILED, Optional.of(reason), outcomes, List.of(), List.of());
+            outcomes.forEach(listener::monitorFinished);
+            return finish(runId, now, startNanos, Status.FAILED, Optional.of(reason), outcomes, List.of(), List.of(), listener);
         }
 
         Map<Integer, MonitorOutcome> outcomes = new LinkedHashMap<>();
@@ -159,9 +178,10 @@ public final class CollectionJob {
             Map<Integer, MonitorPlan> pending = new LinkedHashMap<>();
 
             for (int id : config.monitorIds()) {
-                planMonitor(id, plant, now, outcomes).ifPresent(plan -> {
+                planMonitor(id, plant, now, outcomes, listener).ifPresent(plan -> {
                     pending.put(id, plan);
-                    fetch(plan, executor, permits).whenComplete((chunks, error) ->
+                    listener.monitorPlanned(id, plan.window(), plan.chunks().size());
+                    fetch(plan, executor, permits, listener).whenComplete((chunks, error) ->
                         finished.add(new MonitorFetch(plan, chunks, error)));
                 });
             }
@@ -184,21 +204,33 @@ public final class CollectionJob {
                 pending.remove(f.plan().monitorId());
                 MonitorOutcome outcome = persist(f, now, saved);
                 outcomes.put(outcome.monitorId(), outcome);
+                listener.monitorFinished(outcome);
                 LOG.log(System.Logger.Level.INFO, () -> "Run " + runId + ": monitor " + outcome.monitorId() + " " + outcome.outcome());
             }
             if (!pending.isEmpty()) {
                 executor.shutdownNow();
                 for (MonitorPlan p : pending.values()) {
-                    outcomes.put(p.monitorId(), MonitorOutcome.failed(p.monitorId(), Optional.of(p.window()), p.watermark(), abortReason));
+                    MonitorOutcome outcome = MonitorOutcome.failed(p.monitorId(), Optional.of(p.window()), p.watermark(), abortReason);
+                    outcomes.put(p.monitorId(), outcome);
+                    listener.monitorFinished(outcome);
                 }
             }
         }
 
         List<MonitorOutcome> ordered = config.monitorIds().stream().map(outcomes::get).toList();
-        return finish(runId, now, startNanos, RunReport.statusOf(ordered), Optional.empty(), ordered, saved, List.of());
+        return finish(runId, now, startNanos, RunReport.statusOf(ordered), Optional.empty(), ordered, saved, List.of(), listener);
     }
 
-    private Optional<MonitorPlan> planMonitor(int id, Plant plant, Instant now, Map<Integer, MonitorOutcome> outcomes) {
+    private Optional<MonitorPlan> planMonitor(int id, Plant plant, Instant now, Map<Integer, MonitorOutcome> outcomes,
+                                              SafeListener listener) {
+        Optional<MonitorPlan> plan = plan(id, plant, now, outcomes);
+        if (plan.isEmpty()) {
+            listener.monitorFinished(outcomes.get(id));
+        }
+        return plan;
+    }
+
+    private Optional<MonitorPlan> plan(int id, Plant plant, Instant now, Map<Integer, MonitorOutcome> outcomes) {
         Optional<MonitorPlacement> placement = plant.locate(id);
         if (placement.isEmpty()) {
             outcomes.put(id, MonitorOutcome.failed(id, Optional.empty(), Optional.empty(),
@@ -221,7 +253,8 @@ public final class CollectionJob {
         return Optional.of(new MonitorPlan(placement.get(), window.get(), watermark, window.get().split(config.chunk())));
     }
 
-    private CompletableFuture<List<ChunkResult>> fetch(MonitorPlan plan, ExecutorService executor, Semaphore permits) {
+    private CompletableFuture<List<ChunkResult>> fetch(MonitorPlan plan, ExecutorService executor, Semaphore permits,
+                                                       SafeListener listener) {
         int id = plan.monitorId();
         List<CompletableFuture<ChunkResult>> chunks = plan.chunks().stream().map(chunk -> {
             CompletableFuture<ApiPage<BasicFeature>> basic = CompletableFuture.supplyAsync(
@@ -229,7 +262,8 @@ public final class CollectionJob {
             CompletableFuture<ApiPage<ComputedFeatureSample>> computed = CompletableFuture.supplyAsync(
                 () -> limited(permits, () -> api.fetchComputedFeatures(id, chunk)), executor);
             return basic.thenCombine(computed, (b, c) -> new ChunkResult(chunk, b, c, null))
-                .exceptionally(error -> new ChunkResult(chunk, null, null, unwrap(error)));
+                .exceptionally(error -> new ChunkResult(chunk, null, null, unwrap(error)))
+                .whenComplete((result, error) -> listener.chunkFinished(id, chunk, result != null && result.ok()));
         }).toList();
         return CompletableFuture.allOf(chunks.toArray(new CompletableFuture<?>[0]))
             .thenApply(done -> chunks.stream().map(CompletableFuture::join).toList());
@@ -298,7 +332,8 @@ public final class CollectionJob {
     }
 
     private RunReport finish(String runId, Instant now, long startNanos, Status status, Optional<String> failure,
-                             List<MonitorOutcome> outcomes, List<MonitorBatch> saved, List<String> warnings) {
+                             List<MonitorOutcome> outcomes, List<MonitorBatch> saved, List<String> warnings,
+                             SafeListener listener) {
         List<String> allWarnings = new ArrayList<>(warnings);
         Duration elapsed = Duration.ofNanos(System.nanoTime() - startNanos);
         RunReport report = new RunReport(runId, now, elapsed, status, failure, outcomes, allWarnings);
@@ -312,7 +347,50 @@ public final class CollectionJob {
             }
         }
         LOG.log(status == Status.SUCCESS ? System.Logger.Level.INFO : System.Logger.Level.WARNING, report.summary());
+        listener.runFinished(report);
         return report;
+    }
+
+    /** Shields the run from listener failures. */
+    private static final class SafeListener implements RunListener {
+        private final RunListener delegate;
+
+        SafeListener(RunListener delegate) {
+            this.delegate = delegate;
+        }
+
+        private void guard(String event, Runnable call) {
+            try {
+                call.run();
+            } catch (RuntimeException e) {
+                LOG.log(System.Logger.Level.WARNING, "RunListener." + event + " failed; ignored", e);
+            }
+        }
+
+        @Override
+        public void runStarted(String runId, Instant startedAt, List<Integer> monitorIds) {
+            guard("runStarted", () -> delegate.runStarted(runId, startedAt, monitorIds));
+        }
+
+        @Override
+        public void monitorPlanned(int monitorId, TimeWindow window, int chunks) {
+            guard("monitorPlanned", () -> delegate.monitorPlanned(monitorId, window, chunks));
+        }
+
+        @Override
+        public void chunkFinished(int monitorId, TimeWindow chunk, boolean ok) {
+            guard("chunkFinished", () -> delegate.chunkFinished(monitorId, chunk, ok));
+        }
+
+        @Override
+        public void monitorFinished(MonitorOutcome outcome) {
+            guard("monitorFinished", () -> delegate.monitorFinished(outcome));
+        }
+
+        @Override
+        public void runFinished(RunReport report) {
+            guard("runFinished", () -> delegate.runFinished(report));
+        }
     }
 
     private static Throwable unwrap(Throwable t) {

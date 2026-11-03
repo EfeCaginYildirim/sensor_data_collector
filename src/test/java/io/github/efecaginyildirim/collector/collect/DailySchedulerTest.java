@@ -1,4 +1,4 @@
-package io.github.efecaginyildirim.collector.app;
+package io.github.efecaginyildirim.collector.collect;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;

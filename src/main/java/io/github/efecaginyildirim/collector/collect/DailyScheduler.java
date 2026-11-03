@@ -1,4 +1,4 @@
-package io.github.efecaginyildirim.collector.app;
+package io.github.efecaginyildirim.collector.collect;
 
 import java.time.Clock;
 import java.time.Duration;

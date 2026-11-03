@@ -3,6 +3,7 @@ package io.github.efecaginyildirim.collector.api;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.random.RandomGenerator;
 
 /**
@@ -59,6 +60,21 @@ public record RetryPolicy(int maxAttempts, Duration baseDelay, Duration maxDelay
         int shift = Math.min(failedAttempt - 1, 30);
         Duration ceiling = baseDelay.multipliedBy(1L << shift);
         return ceiling.compareTo(maxDelay) > 0 ? maxDelay : ceiling;
+    }
+
+    private static final RandomGenerator JITTER = () -> ThreadLocalRandom.current().nextLong();
+
+    /**
+     * A random source for {@link #backoff} that is safe to share between threads and needs nothing
+     * beyond {@code java.base}: every call draws from the calling thread's {@link ThreadLocalRandom}.
+     * {@link RandomGenerator#getDefault()} would return one unsynchronized instance shared by all
+     * concurrent requests, and loads its algorithm from the {@code jdk.random} module, which the
+     * trimmed runtime of the desktop app does not contain.
+     *
+     * @return the shared jitter source
+     */
+    public static RandomGenerator jitter() {
+        return JITTER;
     }
 
     /**

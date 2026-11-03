@@ -89,6 +89,7 @@ class MainTest {
         assertTrue(r.output().contains("== Run 1"), r.output());
         assertTrue(r.output().contains("== Run 2"), r.output());
         assertTrue(r.output().contains("Fleet health"), r.output());
+        assertTrue(r.output().contains("Run history: 2 runs stored"), r.output());
         assertEquals(3, r.output().lines().filter(l -> l.contains("COLLECTED")).count() / 2, r.output());
         assertEquals(2, dir.toFile().list().length, "one snapshot per run");
     }
