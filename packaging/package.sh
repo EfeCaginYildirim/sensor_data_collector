@@ -35,6 +35,7 @@ esac
 
 mkdir -p "$work/input" "$out"
 cp "$jar" "$work/input/app.jar"
+cp "$here/../LICENSE" "$here/../THIRD_PARTY_NOTICES.md" "$work/input/"
 
 # Modules the app needs, plus ones jdeps cannot see: EC cryptography for TLS to the vendor API.
 # H2's optional tools (web console, Java-source functions, scripting) pull in the AWT/Swing stack,

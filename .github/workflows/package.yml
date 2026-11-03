@@ -78,6 +78,9 @@ jobs:
           else
             powershell -NoProfile -Command "Expand-Archive -Path (Get-Item dist\*.zip) -DestinationPath unpacked"
           fi
+          # the licence texts travel with the app: ours next to the jar, OpenJDK's in the runtime
+          find unpacked -path '*app/LICENSE' -o -path '*app/THIRD_PARTY_NOTICES.md' -o -type d -name legal -path '*runtime*' | tee licences.txt
+          [ "$(wc -l < licences.txt)" -eq 3 ] || { echo "licence files missing"; exit 1; }
           packaging/smoke-test.sh unpacked "${{ needs.jar.outputs.version }}"
 
       - uses: actions/upload-artifact@v4
