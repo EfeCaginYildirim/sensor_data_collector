@@ -108,5 +108,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mv dist/app.jar "dist/sensor-data-collector-${{ needs.jar.outputs.version }}.jar"
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes \
-            --title "Sensor Data Collector ${{ needs.jar.outputs.version }}"
+          # a release drafted in the GitHub UI creates the tag itself; attach the files to it then
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes \
+              --title "Sensor Data Collector ${{ needs.jar.outputs.version }}"
+          fi
