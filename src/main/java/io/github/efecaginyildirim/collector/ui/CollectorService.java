@@ -52,7 +52,6 @@ import java.util.OptionalInt;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.random.RandomGenerator;
 import java.util.stream.IntStream;
 
 /**
@@ -475,7 +474,7 @@ public final class CollectorService implements AutoCloseable {
             demoKey = key;
         }
         return new HttpMonitoringApi(demoServer.baseUri(), "demo", "demo", HttpClient.newHttpClient(),
-            Duration.ofSeconds(30), RetryPolicy.defaults(3), Thread::sleep, RandomGenerator.getDefault());
+            Duration.ofSeconds(30), RetryPolicy.defaults(3), Thread::sleep, RetryPolicy.jitter());
     }
 
     private CollectionConfig demoConfig(Map<String, String> s) {

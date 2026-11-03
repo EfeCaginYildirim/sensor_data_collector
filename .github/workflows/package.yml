@@ -1,0 +1,112 @@
+name: Desktop app
+
+# Builds the double-click app for Windows and macOS, starts each package on its own OS and drives it
+# over HTTP. Pull requests keep the zips as workflow artifacts; a version tag (v2.0.0) publishes them
+# as a GitHub release.
+
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jar:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Take the version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: mvn -B -q versions:set -DnewVersion="${GITHUB_REF_NAME#v}" -DgenerateBackupPoms=false
+
+      - name: Build the jar (tests run in the CI workflow)
+        run: mvn -B -DskipTests package
+
+      - id: version
+        run: |
+          version=$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          cp "target/sensor-data-collector-$version.jar" app.jar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: app.jar
+
+  package:
+    needs: jar
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+
+      - name: Package
+        run: packaging/package.sh app.jar "${{ needs.jar.outputs.version }}" dist
+
+      - name: Start the package as a double-click would, collect, query, quit
+        run: |
+          mkdir unpacked
+          if [ "$RUNNER_OS" = macOS ]; then
+            ditto -x -k dist/*.zip unpacked
+          else
+            powershell -NoProfile -Command "Expand-Archive -Path (Get-Item dist\*.zip) -DestinationPath unpacked"
+          fi
+          packaging/smoke-test.sh unpacked "${{ needs.jar.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ runner.os }}
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [jar, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv dist/app.jar "dist/sensor-data-collector-${{ needs.jar.outputs.version }}.jar"
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes \
+            --title "Sensor Data Collector ${{ needs.jar.outputs.version }}"

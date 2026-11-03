@@ -47,7 +47,6 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.CountDownLatch;
 import java.util.logging.Level;
-import java.util.random.RandomGenerator;
 import java.util.stream.IntStream;
 
 /**
@@ -334,7 +333,7 @@ public final class Main {
 
     private static MonitoringApi demoApi(FakeMonitoringServer server) {
         return new HttpMonitoringApi(server.baseUri(), "demo", "demo", HttpClient.newHttpClient(), Duration.ofSeconds(30),
-            RetryPolicy.defaults(3), Thread::sleep, RandomGenerator.getDefault());
+            RetryPolicy.defaults(3), Thread::sleep, RetryPolicy.jitter());
     }
 
     private static List<Integer> monitorIds(int count) {
