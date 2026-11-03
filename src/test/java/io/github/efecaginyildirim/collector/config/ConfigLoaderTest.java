@@ -109,6 +109,15 @@ class ConfigLoaderTest {
     }
 
     @Test
+    void embeddedH2NeedsNoCredentials() {
+        Properties p = minimal();
+        p.setProperty("db.url", "jdbc:h2:file:./data/collector");
+        AppConfig.DatabaseConfig db = ConfigLoader.fromProperties(p, Map.of()).database().orElseThrow();
+        assertEquals("sa", db.user());
+        assertEquals("", db.password());
+    }
+
+    @Test
     void secretsAreMaskedInToString() {
         Properties p = minimal();
         p.setProperty("db.url", "jdbc:sqlserver://h");

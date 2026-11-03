@@ -8,7 +8,7 @@ digital-twin pipeline.
 
 I first wrote it during an engineering internship to automate a manual export. This repository is
 a **ground-up rewrite** of that version: same purpose, but correct under failure, testable without
-the vendor, and measurably parallel. The original code is preserved in the Git history.
+the vendor, and measurably parallel. Data can go to SQL Server or to a single embedded H2 file. The original code is preserved in the Git history.
 
 ```bash
 mvn -q package -DskipTests
@@ -80,6 +80,7 @@ flowchart LR
 | **Virtual threads + `Semaphore`** instead of a fixed thread pool | Blocking code stays readable, and the limit is expressed as what matters: in-flight requests. |
 | **Daily scheduler that recomputes the next local run time** | A fixed 24 h period drifts by an hour across DST, and `scheduleAtFixedRate` silently stops after one uncaught exception. |
 | **`run` as a one-shot command with exit codes** next to `daemon` | Lets cron / Windows Task Scheduler own scheduling, retries and alerting. |
+| **Two databases, one code path:** SQL Server for production, embedded **H2** for the desktop, the demo and tests | H2 runs in MSSQLServer mode, so inserts, deletes and selects are shared; only the DDL and two upserts differ (`SqlDialect`). The embedded store is a single file and needs no server. |
 | No connection pool, no logging framework, no Mockito | One writer and a few connections per day do not need a pool; `System.Logger` + JUL is enough; hand-written fakes test more than mocks. The only runtime dependencies are Jackson and the SQL Server driver. |
 
 ## Benchmark
@@ -111,11 +112,15 @@ brings its own:
   sample-by-sample with one big request.
 - **`FakeMonitoringServer`** (JDK HTTP server) serves that data and injects faults a real service
   cannot be asked for: status codes, `Retry-After`, malformed bodies, latency, token expiry.
+- **`H2RepositoryTest`** runs the repository against a real (embedded) database: idempotent saves,
+  rollback of a failed transaction, exact round-trips of values, NULLs and Unicode, reads and the
+  run history. It caught a bug the mocks could not: two runs within one second collided on the
+  status snapshot's primary key.
 - **`RecordingJdbc`** is a dynamic-proxy JDBC driver that records statements, parameters and
-  transaction boundaries, so the persistence contract (order, typed NULLs, UTC times, rollback) is
-  tested without SQL Server. `docker compose up` runs the same code against a real SQL Server.
+  transaction boundaries, which covers the SQL Server-specific statements without a server.
+  `docker compose up` runs the same code against a real SQL Server.
 
-The suite has 135 tests and runs in under 30 seconds. Examples of what it pins down:
+The suite has 152 tests and runs in under 30 seconds. Examples of what it pins down:
 
 - a `401` is sent once, not three times; a `503` is retried with growing backoff;
 - ten days of downtime leave no gap;
@@ -143,7 +148,9 @@ java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar run         # once; ex
 java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar daemon      # daily at schedule.daily-time
 ```
 
-The schema is created on first start (`src/main/resources/db/schema.sql`, idempotent).
+The schema is created on first start (`src/main/resources/db/{sqlserver,h2}/schema.sql`,
+idempotent). Without a SQL Server, set `db.url=jdbc:h2:file:./data/collector` — no credentials
+needed; six motors take roughly 5 MB per year.
 
 **Full stack in Docker** — SQL Server, the fake API and the collector daemon:
 
@@ -179,7 +186,7 @@ Invalid configuration is reported all at once, with every problem listed.
 | `collection.overlap` | `P3D` | Re-fetched period before the watermark |
 | `collection.chunk` | `P30D` | Longest range per request |
 | `collection.run-deadline` | `PT30M` | Time budget of one run |
-| `db.url`, `db.user`, `db.password` | — | SQL Server; omit and use `--in-memory` to try without |
+| `db.url`, `db.user`, `db.password` | — | `jdbc:sqlserver:…` (user and password required) or `jdbc:h2:file:…` (optional); omit and use `--in-memory` to try without |
 | `output.snapshot-dir` | — | Write a JSON archive of each run |
 | `output.log-dir` | — | Rotating log files (5 × 10 MB) |
 | `schedule.daily-time`, `schedule.zone` | `09:00`, `UTC` | Daemon schedule |
@@ -189,9 +196,9 @@ Invalid configuration is reported all at once, with every problem listed.
 ```
 src/main/java/io/github/efecaginyildirim/collector/
 ├── app/          CLI, DailyScheduler, logging
-├── collect/      CollectionJob, WindowPlanner, RunReport, SnapshotWriter
+├── collect/      CollectionJob, RunListener, WindowPlanner, RunReport, SnapshotWriter
 ├── api/          MonitoringApi, HttpMonitoringApi, RetryPolicy, ApiJsonMapper
-├── persistence/  MotorDataRepository, JdbcMotorDataRepository, InMemoryMotorDataRepository
+├── persistence/  MotorDataRepository / -Reader, RunHistory, JdbcMotorDataRepository, SqlDialect, H2Database
 ├── model/        Plant, MonitorInfo, BasicFeature, ComputedFeatureSample, ComputedFeature
 ├── time/         Timestamps, TimeWindow
 ├── config/       AppConfig, ConfigLoader
@@ -202,9 +209,9 @@ src/main/java/io/github/efecaginyildirim/collector/
 
 - The API contract is reconstructed; the points marked *Assumption* in `docs/API_CONTRACT.md`
   could not be verified against the real service.
-- The SQL statements are checked by the recording driver, not yet by an automated test against a
-  real SQL Server. The Docker Compose setup is there to run them for real; a Testcontainers test
-  would be the next step.
+- The shared SQL runs against H2 in the tests, but the SQL Server-specific DDL and upserts are only
+  checked by the recording driver, not yet by an automated test against a real SQL Server. The
+  Docker Compose setup is there to run them for real; a Testcontainers test would be the next step.
 - The synthetic signal model is intentionally simple — good enough to exercise the pipeline and
   show a degrading bearing, not a physical simulation.
 

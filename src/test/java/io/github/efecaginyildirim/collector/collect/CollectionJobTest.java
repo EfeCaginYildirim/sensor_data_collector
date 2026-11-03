@@ -13,7 +13,6 @@ import io.github.efecaginyildirim.collector.fakeapi.FakeMonitoringServer.Fault;
 import io.github.efecaginyildirim.collector.fakeapi.SyntheticFleet;
 import io.github.efecaginyildirim.collector.model.BasicFeature;
 import io.github.efecaginyildirim.collector.model.ComputedFeatureSample;
-import io.github.efecaginyildirim.collector.persistence.InMemoryMotorDataRepository;
 import io.github.efecaginyildirim.collector.time.TimeWindow;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,7 +42,7 @@ class CollectionJobTest {
     static final List<Integer> MONITORS = List.of(101, 102, 103, 104, 105);
 
     final MutableClock clock = new MutableClock(NOW);
-    final InMemoryMotorDataRepository repo = new InMemoryMotorDataRepository();
+    final TestStore repo = new TestStore();
     FakeMonitoringServer server;
     HttpMonitoringApi api;
 
@@ -59,6 +58,7 @@ class CollectionJobTest {
     @AfterEach
     void stop() {
         server.close();
+        repo.close();
     }
 
     static CollectionConfig config(List<Integer> monitors, Duration overlap, Duration deadline) {
@@ -278,7 +278,7 @@ class CollectionJobTest {
 
         assertThrows(IllegalStateException.class, job::run);
         assertEquals(Status.SUCCESS, first.get().status());
-        assertDoesNotThrow(job::run, "the job is reusable after a run");
+        assertDoesNotThrow(() -> job.run(), "the job is reusable after a run");
     }
 
     // ─── Snapshots ───────────────────────────────────────────────────────────────

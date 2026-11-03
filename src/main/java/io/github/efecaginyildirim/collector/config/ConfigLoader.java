@@ -111,10 +111,10 @@ public final class ConfigLoader {
             optional("collection.chunk", ConfigLoader::parsePositiveDuration, Duration.ofDays(30)),
             optional("collection.run-deadline", ConfigLoader::parsePositiveDuration, Duration.ofMinutes(30)));
 
-        Optional<DatabaseConfig> database = value("db.url").map(url -> new DatabaseConfig(
-            url,
-            required("db.user", Function.identity()),
-            required("db.password", Function.identity())));
+        // An embedded H2 file needs no credentials; SQL Server does.
+        Optional<DatabaseConfig> database = value("db.url").map(url -> url.toLowerCase(Locale.ROOT).startsWith("jdbc:h2:")
+            ? new DatabaseConfig(url, optional("db.user", Function.identity(), "sa"), optional("db.password", Function.identity(), ""))
+            : new DatabaseConfig(url, required("db.user", Function.identity()), required("db.password", Function.identity())));
 
         OutputConfig output = new OutputConfig(
             value("output.snapshot-dir").map(Path::of),

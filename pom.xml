@@ -17,6 +17,7 @@
 
     <jackson.version>2.17.2</jackson.version>
     <mssql-jdbc.version>12.8.1.jre11</mssql-jdbc.version>
+    <h2.version>2.3.232</h2.version>
     <junit.version>5.10.3</junit.version>
   </properties>
 
@@ -31,6 +32,13 @@
       <groupId>com.microsoft.sqlserver</groupId>
       <artifactId>mssql-jdbc</artifactId>
       <version>${mssql-jdbc.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+    <!-- Embedded database of the desktop / demo modes; also used for real-SQL tests. -->
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <version>${h2.version}</version>
       <scope>runtime</scope>
     </dependency>
     <dependency>

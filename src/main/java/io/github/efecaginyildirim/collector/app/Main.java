@@ -12,12 +12,16 @@ import io.github.efecaginyildirim.collector.config.ConfigException;
 import io.github.efecaginyildirim.collector.config.ConfigLoader;
 import io.github.efecaginyildirim.collector.fakeapi.FakeMonitoringServer;
 import io.github.efecaginyildirim.collector.fakeapi.SyntheticFleet;
+import io.github.efecaginyildirim.collector.collect.RunHistoryListener;
 import io.github.efecaginyildirim.collector.model.ComputedFeature;
-import io.github.efecaginyildirim.collector.model.ComputedFeatureSample;
-import io.github.efecaginyildirim.collector.model.MonitorInfo.MonitorStatus;
-import io.github.efecaginyildirim.collector.persistence.InMemoryMotorDataRepository;
+import io.github.efecaginyildirim.collector.persistence.DatasetQuery;
+import io.github.efecaginyildirim.collector.persistence.DatasetRow;
+import io.github.efecaginyildirim.collector.persistence.H2Database;
 import io.github.efecaginyildirim.collector.persistence.JdbcMotorDataRepository;
+import io.github.efecaginyildirim.collector.persistence.MotorDataReader;
+import io.github.efecaginyildirim.collector.persistence.MotorDataReader.MonitorSummary;
 import io.github.efecaginyildirim.collector.persistence.MotorDataRepository;
+import io.github.efecaginyildirim.collector.time.TimeWindow;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -33,8 +37,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.concurrent.CountDownLatch;
 import java.util.logging.Level;
 import java.util.random.RandomGenerator;
@@ -123,21 +127,25 @@ public final class Main {
     private static int run(Options o, PrintStream out, Map<String, String> env) {
         AppConfig config = loadConfig(o, env);
         Logging.configure(o.flag("verbose") ? Level.INFO : Level.WARNING, config.output().logDirectory());
-        CollectionJob job = productionJob(config, repository(config, o));
-        RunReport report = job.run();
-        out.print(report.summary());
-        return report.status().exitCode();
+        try (JdbcMotorDataRepository repo = repository(config, o)) {
+            RunReport report = productionJob(config, repo).run(new RunHistoryListener(repo));
+            out.print(report.summary());
+            return report.status().exitCode();
+        }
     }
 
     private static int daemon(Options o, PrintStream out, Map<String, String> env) throws InterruptedException {
         AppConfig config = loadConfig(o, env);
         Logging.configure(Level.INFO, config.output().logDirectory());
-        CollectionJob job = productionJob(config, repository(config, o));
+        JdbcMotorDataRepository repo = repository(config, o);
+        CollectionJob job = productionJob(config, repo);
+        RunHistoryListener history = new RunHistoryListener(repo);
         DailyScheduler scheduler = new DailyScheduler(config.schedule().dailyRunTime(), config.schedule().zone(),
-            Clock.systemUTC(), () -> out.print(job.run().summary()));
+            Clock.systemUTC(), () -> out.print(job.run(history).summary()));
         CountDownLatch stopped = new CountDownLatch(1);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             scheduler.close();
+            repo.close();
             stopped.countDown();
         }, "shutdown"));
         scheduler.start();
@@ -160,8 +168,8 @@ public final class Main {
         List<Integer> ids = monitorIds(monitorCount);
         SyntheticFleet fleet = SyntheticFleet.create(1, ids, SyntheticFleet.Options.defaults(seed, start));
 
-        try (FakeMonitoringServer server = FakeMonitoringServer.start(fleet, clock, "demo", "demo")) {
-            InMemoryMotorDataRepository repo = new InMemoryMotorDataRepository();
+        try (FakeMonitoringServer server = FakeMonitoringServer.start(fleet, clock, "demo", "demo");
+             JdbcMotorDataRepository repo = H2Database.inMemory()) {
             CollectionConfig cc = new CollectionConfig(1, ids,
                 LocalDate.ofInstant(start.minus(Duration.ofDays(days)), ZoneOffset.UTC),
                 Duration.ofDays(3), Duration.ofDays(30), Duration.ofMinutes(5));
@@ -171,18 +179,19 @@ public final class Main {
             out.println("Fake vendor API at " + server.baseUri() + " serving " + monitorCount + " synthetic motors.");
             out.println();
             out.println("== Run 1: initial backfill of " + days + " days ==");
-            out.print(job.run().summary());
+            out.print(job.run(new RunHistoryListener(repo)).summary());
             long backfillRequests = server.requests().size();
 
             clock.advance(Duration.ofDays(1));
             server.resetRecording();
             out.println();
             out.println("== Run 2: one day later - only watermark minus 3 days overlap is fetched ==");
-            RunReport second = job.run();
+            RunReport second = job.run(new RunHistoryListener(repo));
             out.print(second.summary());
             out.printf("HTTP requests: %d for the backfill, %d for the incremental run%n%n", backfillRequests, server.requests().size());
 
             out.print(healthTable(repo, ids));
+            out.printf("Run history: %d runs stored%n", repo.recentRuns(10).size());
             return second.status().exitCode();
         }
     }
@@ -207,11 +216,15 @@ public final class Main {
             double baseline = 0;
             for (int level : levels) {
                 server.resetRecording();
-                CollectionJob job = new CollectionJob(demoApi(server), new InMemoryMotorDataRepository(), cc, level,
-                    Clock.fixed(now, ZoneOffset.UTC), Optional.empty());
-                long t0 = System.nanoTime();
-                RunReport report = job.run();
-                double seconds = (System.nanoTime() - t0) / 1e9;
+                double seconds;
+                RunReport report;
+                try (JdbcMotorDataRepository repo = H2Database.inMemory()) {
+                    CollectionJob job = new CollectionJob(demoApi(server), repo, cc, level,
+                        Clock.fixed(now, ZoneOffset.UTC), Optional.empty());
+                    long t0 = System.nanoTime();
+                    report = job.run();
+                    seconds = (System.nanoTime() - t0) / 1e9;
+                }
                 if (report.status() != RunReport.Status.SUCCESS) {
                     out.print(report.summary());
                     return 1;
@@ -250,11 +263,11 @@ public final class Main {
         return ConfigLoader.load(Path.of(o.value("config").orElse(DEFAULT_CONFIG)), env);
     }
 
-    private static MotorDataRepository repository(AppConfig config, Options o) {
+    private static JdbcMotorDataRepository repository(AppConfig config, Options o) {
         if (o.flag("in-memory")) {
-            return new InMemoryMotorDataRepository();
+            return H2Database.inMemory();
         }
-        MotorDataRepository repo = JdbcMotorDataRepository.create(config.database().orElseThrow(() -> new ConfigException(List.of(
+        JdbcMotorDataRepository repo = JdbcMotorDataRepository.create(config.database().orElseThrow(() -> new ConfigException(List.of(
             "db.url is required for this command (or pass --in-memory to try without a database)"))));
         repo.initialize();
         return repo;
@@ -287,36 +300,37 @@ public final class Main {
     }
 
     /** Compares the first and last week of key bearing indicators per monitor. */
-    static String healthTable(InMemoryMotorDataRepository repo, List<Integer> ids) {
+    static String healthTable(MotorDataReader reader, List<Integer> ids) {
         StringBuilder sb = new StringBuilder("Fleet health (first week -> last week of collected data)\n");
         sb.append(String.format("  %-6s %-24s %-7s %-22s %s%n", "id", "monitor", "health", "kurtosis X", "BPFO amplitude"));
-        for (int id : ids) {
-            List<ComputedFeatureSample> samples = repo.computedFeatures(id);
-            if (samples.isEmpty()) {
+        for (MonitorSummary m : reader.monitors()) {
+            if (!ids.contains(m.monitorId()) || m.collectedUntil().isEmpty() || m.computedSamples() == 0) {
                 continue;
             }
-            Instant first = samples.get(0).time();
-            Instant last = samples.get(samples.size() - 1).time();
-            Integer health = Optional.ofNullable(repo.statusSnapshots(id).lastEntry()).map(Entry::getValue)
-                .map(MonitorStatus::healthScore).orElse(null);
-            String name = repo.monitor(id).map(p -> p.machine().name() + " " + p.monitor().name()).orElse("?");
-            sb.append(String.format("  %-6d %-24s %-7s %-22s %s%n", id, name, health == null ? "-" : health,
-                trend(samples, ComputedFeature.KURTACCLX, first, last), trend(samples, ComputedFeature.BPFO, first, last)));
+            Instant end = m.collectedUntil().get();
+            List<DatasetRow> rows = new ArrayList<>();
+            reader.query(new DatasetQuery(List.of(m.monitorId()), new TimeWindow(Instant.EPOCH, end),
+                List.of(ComputedFeature.KURTACCLX, ComputedFeature.BPFO), OptionalInt.empty()), rows::add);
+            Instant first = rows.get(0).time();
+            Instant last = rows.get(rows.size() - 1).time();
+            Integer health = m.latestStatus().map(s -> s.status().healthScore()).orElse(null);
+            sb.append(String.format("  %-6d %-24s %-7s %-22s %s%n", m.monitorId(), m.machineName() + " " + m.monitorName(),
+                health == null ? "-" : health, trend(rows, 0, first, last), trend(rows, 1, first, last)));
         }
         return sb.toString();
     }
 
-    private static String trend(List<ComputedFeatureSample> samples, ComputedFeature f, Instant first, Instant last) {
-        double early = mean(samples, f, first, first.plus(Duration.ofDays(7)));
-        double late = mean(samples, f, last.minus(Duration.ofDays(7)), last.plusSeconds(1));
+    private static String trend(List<DatasetRow> rows, int column, Instant first, Instant last) {
+        double early = mean(rows, column, first, first.plus(Duration.ofDays(7)));
+        double late = mean(rows, column, last.minus(Duration.ofDays(7)), last.plusSeconds(1));
         String arrow = late > early * 1.25 ? "  RISING" : late < early * 0.8 ? "  FALLING" : "";
         return String.format("%.2f -> %.2f%s", early, late, arrow);
     }
 
-    private static double mean(List<ComputedFeatureSample> samples, ComputedFeature f, Instant from, Instant to) {
-        return samples.stream()
-            .filter(s -> !s.time().isBefore(from) && s.time().isBefore(to))
-            .map(s -> s.value(f))
+    private static double mean(List<DatasetRow> rows, int column, Instant from, Instant to) {
+        return rows.stream()
+            .filter(r -> !r.time().isBefore(from) && r.time().isBefore(to))
+            .map(r -> r.value(column))
             .filter(v -> v.isPresent())
             .mapToDouble(v -> v.getAsDouble())
             .average().orElse(Double.NaN);
