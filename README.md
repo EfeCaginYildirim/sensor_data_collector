@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/ci.yml/badge.svg)](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/ci.yml)
 [![Desktop app](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/package.yml/badge.svg)](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/package.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A Java 21 service that collects vibration and health data from industrial motor sensors through a
 vendor condition-monitoring API and stores it in SQL Server for a predictive-maintenance /
@@ -300,5 +301,6 @@ src/main/java/io/github/efecaginyildirim/collector/
 
 ## License
 
-Shared for educational and portfolio purposes, without warranty. Contains no real plant, sensor or
-customer data.
+[MIT](LICENSE). The jar and the desktop packages also contain third-party components under their
+own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The repository contains no
+real plant, sensor or customer data.
