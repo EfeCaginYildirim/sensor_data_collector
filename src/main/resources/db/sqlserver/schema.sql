@@ -126,6 +126,18 @@ CREATE TABLE dbo.collection_run (
 );
 GO
 
+-- Time ranges the user excluded by hand (sensor faults, maintenance). Applied when datasets are read.
+IF OBJECT_ID(N'dbo.sample_exclusion', N'U') IS NULL
+CREATE TABLE dbo.sample_exclusion (
+    exclusion_id BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT pk_sample_exclusion PRIMARY KEY,
+    monitor_id   INT           NOT NULL CONSTRAINT fk_sample_exclusion_monitor REFERENCES dbo.monitor (monitor_id),
+    from_time    DATETIME2(3)  NOT NULL,
+    to_time      DATETIME2(3)  NOT NULL,
+    reason       NVARCHAR(500) NOT NULL,
+    created_at   DATETIME2(3)  NOT NULL
+);
+GO
+
 -- Convenience view for digital-twin consumers: one row per monitor and day, joining the daily
 -- aggregate with that day's computed-feature averages. Joining on the day replaces the
 -- cartesian product of the legacy single-table design.

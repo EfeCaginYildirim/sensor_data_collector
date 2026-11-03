@@ -1,5 +1,8 @@
 package io.github.efecaginyildirim.collector.persistence;
 
+import io.github.efecaginyildirim.collector.dataset.DatasetPipeline;
+import io.github.efecaginyildirim.collector.dataset.DatasetSpec;
+import io.github.efecaginyildirim.collector.dataset.Sampling;
 import io.github.efecaginyildirim.collector.model.BasicFeature;
 import io.github.efecaginyildirim.collector.model.ComputedFeature;
 import io.github.efecaginyildirim.collector.model.ComputedFeatureSample;
@@ -241,6 +244,52 @@ class H2RepositoryTest {
         assertEquals(2000, runs.get(0).failure().orElseThrow().length(), "long failures are truncated");
         assertEquals("summary b — ç", runs.get(0).summary());
         assertEquals(1, repo.recentRuns(1).size());
+    }
+
+    // ─── Manual exclusions ───────────────────────────────────────────────────────
+
+    @Test
+    void exclusionsAreStoredListedAndRemoved() {
+        repo.save(batch(101, T0, 3));
+        repo.save(batch(102, T0, 3));
+        TimeWindow day2 = new TimeWindow(T0.plus(Duration.ofDays(1)), T0.plus(Duration.ofDays(2)));
+
+        SampleExclusion a = repo.addExclusion(101, day2, "  bearing replaced  ", T0);
+        SampleExclusion b = repo.addExclusion(102, new TimeWindow(T0, T0.plusSeconds(3600)), "sensor unplugged — ç", T0);
+
+        assertTrue(a.id() > 0 && b.id() > a.id());
+        assertEquals("bearing replaced", a.reason(), "reasons are trimmed");
+        assertEquals(List.of(a, b), repo.exclusions(List.of()));
+        assertEquals(List.of(b), repo.exclusions(List.of(102)));
+        assertTrue(repo.removeExclusion(a.id()));
+        assertFalse(repo.removeExclusion(a.id()));
+        assertEquals(List.of(b), repo.exclusions(List.of()));
+    }
+
+    @Test
+    void exclusionsNeedAReasonAndAKnownMonitor() {
+        repo.save(batch(101, T0, 1));
+        TimeWindow w = new TimeWindow(T0, T0.plusSeconds(60));
+        assertThrows(IllegalArgumentException.class, () -> repo.addExclusion(101, w, "   ", T0));
+        assertThrows(IllegalArgumentException.class, () -> repo.addExclusion(101, w, "x".repeat(501), T0));
+        IllegalArgumentException unknown = assertThrows(IllegalArgumentException.class, () -> repo.addExclusion(999, w, "why", T0));
+        assertTrue(unknown.getMessage().contains("999"));
+    }
+
+    @Test
+    void datasetPipelineRunsAgainstTheRealDatabase() {
+        repo.save(batch(101, T0, 3));
+        SampleExclusion firstDay = repo.addExclusion(101, new TimeWindow(T0, T0.plus(Duration.ofDays(1))), "warm-up", T0);
+        DatasetSpec spec = new DatasetSpec(List.of(101), Optional.empty(), Optional.empty(),
+            List.of(ComputedFeature.RPM), List.of(), false, Sampling.DAILY, Optional.empty(), true);
+
+        List<DatasetRow> rows = new ArrayList<>();
+        DatasetPipeline.Stats stats = DatasetPipeline.run(repo, spec, repo.exclusions(List.of(101)), rows::add);
+
+        assertEquals(12, stats.read());
+        assertEquals(4, stats.excludedManually());
+        assertEquals(List.of(1481.0, 1482.0), rows.stream().map(r -> r.values().get(0)).toList(), "daily mean of each remaining day");
+        assertEquals(firstDay.window().end(), rows.get(0).time());
     }
 
     // ─── Files and URLs ──────────────────────────────────────────────────────────

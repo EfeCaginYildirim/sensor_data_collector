@@ -57,7 +57,8 @@ import java.util.stream.Collectors;
  *
  * <p>All timestamps are stored as UTC.
  */
-public final class JdbcMotorDataRepository implements MotorDataRepository, MotorDataReader, RunHistory, AutoCloseable {
+public final class JdbcMotorDataRepository implements MotorDataRepository, MotorDataReader, RunHistory, ExclusionStore,
+    AutoCloseable {
 
     /** Supplies JDBC connections; each call returns a new connection owned by the caller. */
     @FunctionalInterface
@@ -121,6 +122,14 @@ public final class JdbcMotorDataRepository implements MotorDataRepository, Motor
     static final String SELECT_RUNS = "SELECT run_id, started_at, elapsed_ms, status, failure, monitors_total, "
         + "monitors_failed, new_rows, summary FROM dbo.collection_run ORDER BY started_at DESC, run_id "
         + "OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY";
+
+    static final String INSERT_EXCLUSION = "INSERT INTO dbo.sample_exclusion (monitor_id, from_time, to_time, reason, created_at) "
+        + "VALUES (?, ?, ?, ?, ?)";
+
+    static final String DELETE_EXCLUSION = "DELETE FROM dbo.sample_exclusion WHERE exclusion_id = ?";
+
+    static final String SELECT_EXCLUSIONS = "SELECT exclusion_id, monitor_id, from_time, to_time, reason, created_at "
+        + "FROM dbo.sample_exclusion";
 
     private final ConnectionFactory connections;
     private final SqlDialect dialect;
@@ -463,6 +472,70 @@ public final class JdbcMotorDataRepository implements MotorDataRepository, Motor
             }
         } catch (SQLException e) {
             throw new PersistenceException("reading the run history failed", e);
+        }
+    }
+
+    // ─── Manual exclusions ───────────────────────────────────────────────────────
+
+    @Override
+    public SampleExclusion addExclusion(int monitorId, TimeWindow window, String reason, Instant now) {
+        String text = reason == null ? "" : reason.strip();
+        if (text.isEmpty() || text.length() > 500) {
+            throw new IllegalArgumentException("give a reason of 1 to 500 characters");
+        }
+        try (Connection c = connections.open();
+             PreparedStatement ps = c.prepareStatement(INSERT_EXCLUSION, Statement.RETURN_GENERATED_KEYS)) {
+            c.setAutoCommit(true);
+            ps.setInt(1, monitorId);
+            ps.setObject(2, utc(window.start()));
+            ps.setObject(3, utc(window.end()));
+            ps.setString(4, text);
+            ps.setObject(5, utc(now));
+            ps.executeUpdate();
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                if (!keys.next()) {
+                    throw new SQLException("no generated key returned");
+                }
+                return new SampleExclusion(keys.getLong(1), monitorId, window, text, now);
+            }
+        } catch (SQLException e) {
+            if (e.getSQLState() != null && e.getSQLState().startsWith("23")) {
+                throw new IllegalArgumentException("monitor " + monitorId + " has no collected data", e);
+            }
+            throw new PersistenceException("adding an exclusion for monitor " + monitorId + " failed", e);
+        }
+    }
+
+    @Override
+    public boolean removeExclusion(long id) {
+        try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(DELETE_EXCLUSION)) {
+            c.setAutoCommit(true);
+            ps.setLong(1, id);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            throw new PersistenceException("removing exclusion " + id + " failed", e);
+        }
+    }
+
+    @Override
+    public List<SampleExclusion> exclusions(List<Integer> monitorIds) {
+        String sql = SELECT_EXCLUSIONS
+            + (monitorIds.isEmpty() ? "" : " WHERE monitor_id IN (" + String.join(", ", Collections.nCopies(monitorIds.size(), "?")) + ")")
+            + " ORDER BY monitor_id, from_time, exclusion_id";
+        try (Connection c = connections.open(); PreparedStatement ps = c.prepareStatement(sql)) {
+            for (int i = 0; i < monitorIds.size(); i++) {
+                ps.setInt(i + 1, monitorIds.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                List<SampleExclusion> out = new ArrayList<>();
+                while (rs.next()) {
+                    out.add(new SampleExclusion(rs.getLong(1), rs.getInt(2), new TimeWindow(instant(rs, 3), instant(rs, 4)),
+                        rs.getString(5), instant(rs, 6)));
+                }
+                return out;
+            }
+        } catch (SQLException e) {
+            throw new PersistenceException("listing exclusions failed", e);
         }
     }
 

@@ -135,7 +135,7 @@ class JdbcMotorDataRepositoryTest {
         repository(1000).initialize();
 
         List<String> batches = JdbcMotorDataRepository.schemaBatches(SqlDialect.SQL_SERVER.schemaResource());
-        assertEquals(7, batches.size(), "6 tables + 1 view");
+        assertEquals(8, batches.size(), "7 tables + 1 view");
         assertEquals(batches, jdbc.executions("execute").stream().map(Execution::sql).toList());
         assertTrue(batches.stream().noneMatch(b -> b.lines().anyMatch(l -> l.strip().equalsIgnoreCase("GO"))));
         assertTrue(batches.get(batches.size() - 1).startsWith("-- Convenience view"));

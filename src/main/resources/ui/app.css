@@ -238,6 +238,89 @@ fieldset .check { display: flex; align-items: center; gap: 0.5rem; grid-column: 
 .quit { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; color: var(--steel); }
 .quit p { margin: 0; }
 
+/* ── Data ────────────────────────────────────────────────────────────── */
+
+main:has(#view-data:not([hidden])) { max-width: 86rem; }
+
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.data-head { display: flex; justify-content: space-between; align-items: end; gap: 1.5rem; flex-wrap: wrap; }
+.presets { display: flex; align-items: end; gap: 0.5rem; flex-wrap: wrap; max-width: none; }
+.presets label { display: grid; gap: 0.2rem; font-size: var(--step--1); color: var(--steel); }
+.presets button { border: 1px solid var(--petrol); background: var(--surface); color: var(--petrol); padding: 0.4rem 0.8rem; border-radius: 3px; }
+.presets button.quiet { border-color: var(--rule); color: var(--steel); }
+
+.data-layout { display: grid; grid-template-columns: minmax(18rem, 22rem) minmax(0, 1fr); gap: 2rem; align-items: start; }
+
+.filters fieldset { grid-template-columns: 1fr 1fr; margin-bottom: 1.25rem; }
+.filters fieldset > .checks, .filters fieldset > .check, .filters fieldset > div, .filters fieldset > p,
+.filters fieldset > table, .filters fieldset > button, .filters .rows > label { grid-column: 1 / -1; }
+.hint { font-weight: 400; font-size: var(--step--1); color: var(--steel); margin: 0; }
+legend .hint { margin-left: 0.4rem; }
+.checks { display: grid; gap: 0.35rem; }
+.filters label.check { color: var(--ink); font-size: var(--step-0); }
+
+button.link { background: none; border: 0; padding: 0.15rem 0; color: var(--petrol); text-decoration: underline; text-underline-offset: 0.15em; justify-self: start; }
+button.link:hover { color: #0b5770; }
+
+.matrix { border-collapse: collapse; width: 100%; }
+.matrix th, .matrix td { padding: 0.2rem 0.25rem; border-bottom: 1px solid var(--rule); }
+.matrix th[scope="row"] { text-align: left; font-weight: 400; }
+.matrix td { text-align: center; width: 2.6rem; }
+.matrix input { width: 1.05rem; height: 1.05rem; margin: 0; accent-color: var(--petrol); }
+.family-toggle, .axis-toggle { background: none; border: 0; padding: 0.1rem 0; color: var(--ink); text-align: left; font-size: var(--step--1); }
+.axis-toggle { font-weight: 600; width: 100%; text-align: center; color: var(--steel); }
+.family-toggle:hover, .axis-toggle:hover { color: var(--petrol); }
+#single-columns { margin-top: 0.75rem; }
+.column-tools { display: flex; gap: 1rem; margin: 0.25rem 0 0; }
+
+.rule { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem; padding: 0.6rem; margin-bottom: 0.5rem; background: var(--surface); border-left: 3px solid var(--warning); }
+.rule select, .rule input, .change select, .change input { min-width: 0; width: 100%; }
+.rule span { grid-column: 1 / -1; font-size: var(--step--1); color: var(--steel); }
+.rule select:first-of-type { grid-column: 1 / -1; }
+.rule .link { grid-column: 1 / -1; font-size: var(--step--1); }
+.rows > label:not(.check) { display: grid; gap: 0.25rem; font-size: var(--step--1); color: var(--steel); }
+.change { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 0.35rem; align-items: end; padding-left: 1.6rem; }
+.change label { display: grid; gap: 0.2rem; font-size: var(--step--1); color: var(--steel); }
+.change .hint { grid-column: 1 / -1; }
+
+.results > * { margin-bottom: 1.75rem; }
+.results .problems { margin-bottom: 1rem; }
+
+/* The funnel: every filter's effect, read top to bottom. Removed rows are hatched like the chart. */
+.funnel h3, .export h3 { font-size: var(--step-1); margin-bottom: 0.6rem; }
+.funnel ol { list-style: none; margin: 0; padding: 0; border-top: 2px solid var(--ink); }
+.step { display: grid; grid-template-columns: minmax(12rem, 1.2fr) minmax(8rem, 2fr) 6.5rem; gap: 1rem; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid var(--rule); }
+.step-bar { height: 0.85rem; background: #e3e8e7; }
+.step-bar span { display: block; height: 100%; min-width: 1px; }
+.step-value { text-align: right; font-size: var(--step-1); }
+.step.total .step-bar span { background: var(--petrol); }
+.step.removed { color: var(--steel); }
+.step.removed .step-label { padding-left: 1rem; }
+.step.removed .step-bar span { background: repeating-linear-gradient(135deg, var(--warning) 0 1.5px, transparent 1.5px 5px); }
+.step.result { border-bottom: 2px solid var(--ink); font-weight: 600; }
+.step.result .step-bar span { background: var(--ink); }
+.step.result .step-value { font-size: var(--step-2); }
+
+.data-chart { padding: 1.25rem; background: var(--surface); border: 1px solid var(--rule); }
+.data-chart h3 { font-size: var(--step-1); }
+.data-chart .chart { min-height: 260px; }
+.data-chart .u-select { background: rgba(194, 64, 44, 0.12); border-left: 1px solid var(--warning); border-right: 1px solid var(--warning); }
+.exclude-form { display: flex; align-items: end; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.9rem; padding: 0.9rem; max-width: none; background: #fbe9e5; border-left: 4px solid var(--warning); }
+.exclude-form p { flex-basis: 100%; margin: 0; }
+.exclude-form label { display: grid; gap: 0.2rem; font-size: var(--step--1); color: var(--steel); flex: 1; min-width: 16rem; }
+.exclude-form button.quiet { border: 1px solid var(--rule); background: var(--surface); color: var(--steel); padding: 0.5rem 1rem; border-radius: 3px; }
+
+.export-form { display: flex; align-items: end; gap: 0.75rem; flex-wrap: wrap; max-width: none; }
+.export-form label { display: grid; gap: 0.2rem; font-size: var(--step--1); color: var(--steel); }
+
+.preview { overflow: auto; max-height: 30rem; border-bottom: 1px solid var(--rule); }
+.preview .grid { margin-bottom: 0; }
+.preview .grid caption { position: sticky; left: 0; }
+.preview thead th { position: sticky; top: 0; background: var(--panel); }
+.preview .grid { font-size: var(--step--1); white-space: nowrap; }
+.preview .grid td, .preview .grid th { padding: 0.3rem 0.6rem; }
+
 /* ── Small screens and motion ────────────────────────────────────────── */
 
 @media (max-width: 720px) {
@@ -245,6 +328,15 @@ fieldset .check { display: flex; align-items: center; gap: 0.5rem; grid-column: 
   .monitor .strip-cell, .monitor .collected { grid-column: 1 / -1; text-align: left; }
   fieldset { grid-template-columns: 1fr; }
   .status { margin-left: 0; width: 100%; padding-bottom: 0.5rem; }
+}
+
+@media (max-width: 960px) {
+  .data-layout { grid-template-columns: minmax(0, 1fr); }
+  .step { grid-template-columns: 1fr 6rem; }
+  .step-bar { grid-column: 1 / -1; grid-row: 2; }
+  .data-chart .pickers { flex-wrap: wrap; width: 100%; }
+  .data-chart .pickers label, .export-form label { flex: 1 1 12rem; min-width: 0; }
+  .data-chart select, .export-form select { width: 100%; min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

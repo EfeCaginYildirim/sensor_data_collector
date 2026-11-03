@@ -11,6 +11,9 @@ import io.github.efecaginyildirim.collector.collect.RunListener;
 import io.github.efecaginyildirim.collector.config.AppConfig;
 import io.github.efecaginyildirim.collector.config.AppConfig.CollectionConfig;
 import io.github.efecaginyildirim.collector.config.ConfigException;
+import io.github.efecaginyildirim.collector.dataset.CsvWriter;
+import io.github.efecaginyildirim.collector.dataset.DatasetPipeline;
+import io.github.efecaginyildirim.collector.dataset.DatasetSpec;
 import io.github.efecaginyildirim.collector.fakeapi.FakeMonitoringServer;
 import io.github.efecaginyildirim.collector.fakeapi.SyntheticFleet;
 import io.github.efecaginyildirim.collector.model.ComputedFeature;
@@ -22,11 +25,13 @@ import io.github.efecaginyildirim.collector.persistence.JdbcMotorDataRepository;
 import io.github.efecaginyildirim.collector.persistence.MotorDataReader.MonitorSummary;
 import io.github.efecaginyildirim.collector.persistence.MotorDataReader.StatusSnapshot;
 import io.github.efecaginyildirim.collector.persistence.RunHistory.RunRecord;
+import io.github.efecaginyildirim.collector.persistence.SampleExclusion;
 import io.github.efecaginyildirim.collector.time.TimeWindow;
 import io.github.efecaginyildirim.collector.ui.SettingsStore.Mode;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.io.Writer;
 import java.net.http.HttpClient;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -100,6 +105,7 @@ public final class CollectorService implements AutoCloseable {
 
     private final Path dataDirectory;
     private final SettingsStore settings;
+    private final PresetStore presets;
     private final Clock clock;
     private final ProgressTracker progress = new ProgressTracker();
     private final ExecutorService runner = Executors.newSingleThreadExecutor(r -> new Thread(r, "collection-run"));
@@ -120,6 +126,7 @@ public final class CollectorService implements AutoCloseable {
         this.dataDirectory = Objects.requireNonNull(dataDirectory, "dataDirectory");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.settings = new SettingsStore(dataDirectory.resolve("settings.properties"), ZoneId.systemDefault());
+        this.presets = new PresetStore(dataDirectory.resolve("presets.json"));
         synchronized (lock) {
             repositoryFor(SettingsStore.mode(settings.load()));
         }
@@ -215,6 +222,137 @@ public final class CollectorService implements AutoCloseable {
         TimeWindow all = new TimeWindow(Instant.EPOCH, clock.instant().plus(Duration.ofDays(1)));
         reader().query(new DatasetQuery(List.of(monitorId), all, features, OptionalInt.empty()), rows::add);
         return Series.downsample(features, rows, maxPoints);
+    }
+
+    // ─── Datasets ────────────────────────────────────────────────────────────────
+
+    /**
+     * Runs a dataset and keeps its first rows.
+     *
+     * @param spec  the selection
+     * @param limit maximum rows to keep in {@code rows}
+     * @param rows  receives the first {@code limit} output rows
+     * @return counts over the whole dataset
+     */
+    public DatasetPipeline.Stats preview(DatasetSpec spec, int limit, List<DatasetRow> rows) {
+        MotorDataReaderAndExclusions store = store();
+        return DatasetPipeline.run(store.reader(), spec, store.exclusions(spec), row -> {
+            if (rows.size() < limit) {
+                rows.add(row);
+            }
+        });
+    }
+
+    /**
+     * Streams a dataset as CSV.
+     *
+     * @param spec   the selection
+     * @param out    destination
+     * @param format separator and decimal mark
+     * @return counts
+     */
+    public DatasetPipeline.Stats export(DatasetSpec spec, Writer out, CsvWriter.Format format) {
+        MotorDataReaderAndExclusions store = store();
+        CsvWriter csv = new CsvWriter(out, format, spec.features());
+        return DatasetPipeline.run(store.reader(), spec, store.exclusions(spec), csv::write);
+    }
+
+    /**
+     * Chart data of a dataset for one of its monitors. The pipeline runs with every selected column,
+     * so rules, the change filter and incomplete-row dropping keep exactly the rows the export
+     * would; only the plotted columns are then kept and downsampled.
+     *
+     * @param spec      the selection
+     * @param monitorId one of the selected monitors
+     * @param plot      one or two of the selected columns to plot
+     * @param maxPoints upper bound on points
+     * @return the series of the plotted columns
+     */
+    public Series datasetSeries(DatasetSpec spec, int monitorId, List<ComputedFeature> plot, int maxPoints) {
+        if (!spec.monitorIds().contains(monitorId)) {
+            throw new IllegalArgumentException("monitor " + monitorId + " is not part of the selection");
+        }
+        if (plot.isEmpty() || plot.size() > 2) {
+            throw new IllegalArgumentException("plot one or two columns");
+        }
+        int[] index = new int[plot.size()];
+        for (int i = 0; i < index.length; i++) {
+            index[i] = spec.features().indexOf(plot.get(i));
+            if (index[i] < 0) {
+                throw new IllegalArgumentException("column " + plot.get(i).apiName() + " is not selected");
+            }
+        }
+        DatasetSpec one = new DatasetSpec(List.of(monitorId), spec.from(), spec.to(), spec.features(), spec.rules(),
+            spec.dropIncomplete(), spec.sampling(), spec.changeFilter(), spec.applyManualExclusions());
+        List<DatasetRow> rows = new ArrayList<>();
+        MotorDataReaderAndExclusions store = store();
+        DatasetPipeline.run(store.reader(), one, store.exclusions(one), r -> {
+            List<Double> values = new ArrayList<>(index.length);
+            for (int i : index) {
+                values.add(r.values().get(i));
+            }
+            rows.add(new DatasetRow(r.monitorId(), r.time(), values));
+        });
+        return Series.downsample(plot, rows, maxPoints);
+    }
+
+    /**
+     * @param monitorIds monitors, or empty for all
+     * @return manual exclusions of the current mode's database
+     */
+    public List<SampleExclusion> exclusions(List<Integer> monitorIds) {
+        return reader().exclusions(monitorIds);
+    }
+
+    /**
+     * @param monitorId monitor id
+     * @param window    excluded range
+     * @param reason    why
+     * @return the stored exclusion
+     */
+    public SampleExclusion addExclusion(int monitorId, TimeWindow window, String reason) {
+        return reader().addExclusion(monitorId, window, reason, clock.instant());
+    }
+
+    /**
+     * @param id exclusion id
+     * @return whether it existed
+     */
+    public boolean removeExclusion(long id) {
+        return reader().removeExclusion(id);
+    }
+
+    /** @return saved dataset presets in saving order */
+    public List<PresetStore.Preset> presets() {
+        return presets.list();
+    }
+
+    /**
+     * @param name preset name
+     * @param spec selection to save
+     * @return the saved preset
+     */
+    public PresetStore.Preset savePreset(String name, DatasetSpec spec) {
+        return presets.save(name, spec, clock.instant());
+    }
+
+    /**
+     * @param name preset name
+     * @return whether it existed
+     */
+    public boolean deletePreset(String name) {
+        return presets.delete(name);
+    }
+
+    /** The repository of the current mode, captured once per dataset so reads are consistent. */
+    private record MotorDataReaderAndExclusions(JdbcMotorDataRepository reader) {
+        List<SampleExclusion> exclusions(DatasetSpec spec) {
+            return spec.applyManualExclusions() ? reader.exclusions(spec.monitorIds()) : List.of();
+        }
+    }
+
+    private MotorDataReaderAndExclusions store() {
+        return new MotorDataReaderAndExclusions(reader());
     }
 
     // ─── Settings ────────────────────────────────────────────────────────────────

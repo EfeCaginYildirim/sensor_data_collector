@@ -27,8 +27,30 @@ mode, so it works without credentials; switch to your vendor API in Settings.
   vendor's own thresholds (normal, elevated, caution, warning), plus a trend chart of any two
   features. The demo fleet includes two motors with a developing bearing defect.
 - **Collect** — run a collection, watch it fetch time range by time range, read the run history.
+- **Data** — choose what goes into a CSV file without touching the collected data (see below).
 - **Settings** — demo or vendor API, credentials (the password is saved in your user folder and
   never sent back to the browser), and an optional daily schedule.
+
+### Data tab
+
+![Data tab: filters on the left, a step-by-step count of what each filter removes, a chart with an excluded range hatched, and the export controls](docs/screenshots/data.png)
+
+Pick monitors, a date range and columns (vibration features as a family-by-axis grid, so "all
+three axes of RMS velocity" is one click), then thin out the rows:
+
+- **Exclusion rules** such as *leave out rows where idle fraction is above 0.5*; a rule may use a
+  column that is not exported.
+- **Sampling**: every sample, or hourly or daily means.
+- **Only keep rows that changed**: a deadband on every selected column, in percent or absolute
+  units. Long flat stretches collapse to a few rows; each monitor's first and last rows stay.
+- **Manual exclusions**: drag across the chart to leave out a time range, for example while a
+  sensor was being serviced. Each one needs a reason, is listed with it, and can be included again.
+
+The count at the top shows what every step removes, and the chart runs the same pipeline as the
+export, so it shows exactly the rows the file will contain. Selections can be saved under a name.
+Files are written as UTF-8 CSV, comma-separated with a decimal point or semicolon-separated with a
+decimal comma for Excel in Turkish, French or German. Nothing is deleted from the database:
+filters apply at export time, and manual exclusions are stored separately with their reasons.
 
 It is deliberately light: no framework, no build step for the front end, one 50 KB chart library
 (uPlot). Data and settings live in the platform's app-data folder (`%APPDATA%\SensorDataCollector`
@@ -147,14 +169,17 @@ brings its own:
   transaction boundaries, which covers the SQL Server-specific statements without a server.
   `docker compose up` runs the same code against a real SQL Server.
 
-The suite has 184 tests and runs in under a minute. The web UI is also checked in a real browser
+The suite has 205 tests and runs in under a minute. The web UI is also checked in a real browser
 (Playwright, Chromium) during development: sign-in, a full collection, the chart, settings
-validation and the mobile layout, with no console errors. Examples of what it pins down:
+validation, the Data tab end to end (rules, change filter, drag-to-exclude, CSV download, saved
+selections) and the mobile layout, with no console errors. Examples of what it pins down:
 
 - a `401` is sent once, not three times; a `503` is retried with growing backoff;
 - ten days of downtime leave no gap;
 - a failing chunk keeps only the gap-free prefix, and the next run resumes there;
 - a database error is reported as a failure (the first version reported it as "0 new rows");
+- the chart of a filtered dataset has exactly as many rows as its CSV export;
+- the change filter never drops a monitor's first or last row;
 - the UI API refuses foreign `Host` headers, cross-site writes, missing sessions and path traversal;
 - in-flight requests never exceed the configured limit;
 - the scheduler stays at 09:00 local time across DST and survives an `Error` thrown by a run.
@@ -227,7 +252,8 @@ Invalid configuration is reported all at once, with every problem listed.
 ```
 src/main/java/io/github/efecaginyildirim/collector/
 ├── app/          CLI, logging
-├── ui/           UiServer, CollectorService, SettingsStore, ProgressTracker, SingleInstance
+├── ui/           UiServer, CollectorService, SettingsStore, PresetStore, ProgressTracker, SingleInstance
+├── dataset/      DatasetSpec, DatasetPipeline, ExcludeRule, ChangeFilter, Sampling, CsvWriter
 ├── collect/      CollectionJob, RunListener, DailyScheduler, WindowPlanner, RunReport
 ├── api/          MonitoringApi, HttpMonitoringApi, RetryPolicy, ApiJsonMapper
 ├── persistence/  MotorDataRepository / -Reader, RunHistory, JdbcMotorDataRepository, SqlDialect, H2Database

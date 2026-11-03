@@ -7,18 +7,28 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.github.efecaginyildirim.collector.dataset.CsvWriter;
+import io.github.efecaginyildirim.collector.dataset.DatasetPipeline;
+import io.github.efecaginyildirim.collector.dataset.DatasetSpec;
 import io.github.efecaginyildirim.collector.model.ComputedFeature;
 import io.github.efecaginyildirim.collector.model.MonitorInfo.MonitorStatus;
 import io.github.efecaginyildirim.collector.model.MonitorInfo.Reading;
 import io.github.efecaginyildirim.collector.persistence.MotorDataReader.MonitorSummary;
 import io.github.efecaginyildirim.collector.persistence.MotorDataReader.StatusSnapshot;
+import io.github.efecaginyildirim.collector.persistence.DatasetRow;
 import io.github.efecaginyildirim.collector.persistence.RunHistory.RunRecord;
+import io.github.efecaginyildirim.collector.persistence.SampleExclusion;
+import io.github.efecaginyildirim.collector.time.TimeWindow;
+import io.github.efecaginyildirim.collector.time.Timestamps;
 import io.github.efecaginyildirim.collector.ui.CollectorService.ConnectionCheck;
 import io.github.efecaginyildirim.collector.ui.CollectorService.StartResult;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -27,6 +37,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -66,6 +78,8 @@ public final class UiServer implements AutoCloseable {
     private static final String COOKIE = "sdc_session";
     private static final int MAX_BODY = 64 * 1024;
     private static final Pattern MONITOR_PATH = Pattern.compile("^/api/monitors/(\\d{1,9})/(history|series)$");
+    private static final Pattern EXCLUSION_PATH = Pattern.compile("^/api/exclusions/(\\d{1,18})$");
+    private static final DateTimeFormatter FILE_TIME = DateTimeFormatter.ofPattern("yyyyMMdd-HHmm").withZone(ZoneOffset.UTC);
     private static final Map<String, String> CONTENT_TYPES = Map.of(
         "html", "text/html; charset=utf-8", "css", "text/css; charset=utf-8",
         "js", "text/javascript; charset=utf-8", "svg", "image/svg+xml", "png", "image/png", "ico", "image/x-icon");
@@ -215,7 +229,9 @@ public final class UiServer implements AutoCloseable {
             checkStateChangingRequest(ex);
         }
         Matcher monitor = MONITOR_PATH.matcher(path);
-        String route = method + " " + (monitor.matches() ? "/api/monitors/{id}/" + monitor.group(2) : path);
+        Matcher exclusion = EXCLUSION_PATH.matcher(path);
+        String route = method + " " + (monitor.matches() ? "/api/monitors/{id}/" + monitor.group(2)
+            : exclusion.matches() ? "/api/exclusions/{id}" : path);
         switch (route) {
             case "GET /api/status" -> sendJson(ex, 200, status());
             case "GET /api/features" -> sendJson(ex, 200, features());
@@ -231,6 +247,21 @@ public final class UiServer implements AutoCloseable {
             case "GET /api/settings" -> sendJson(ex, 200, settings());
             case "PUT /api/settings" -> saveSettings(ex);
             case "POST /api/settings/test" -> sendJson(ex, 200, connectionCheck(service.testConnection(readStringMap(ex))));
+            case "POST /api/dataset/preview" -> datasetPreview(ex);
+            case "POST /api/dataset/series" -> datasetSeries(ex);
+            case "POST /api/dataset/export" -> datasetExport(ex);
+            case "GET /api/exclusions" -> sendJson(ex, 200, exclusions(queryParam(ex, "monitors").orElse("")));
+            case "POST /api/exclusions" -> addExclusion(ex);
+            case "DELETE /api/exclusions/{id}" -> {
+                boolean removed = service.removeExclusion(Long.parseLong(exclusion.group(1)));
+                sendJson(ex, removed ? 200 : 404, JSON.createObjectNode().put("removed", removed));
+            }
+            case "GET /api/presets" -> sendJson(ex, 200, presets());
+            case "POST /api/presets" -> savePreset(ex);
+            case "DELETE /api/presets" -> {
+                boolean removed = service.deletePreset(queryParam(ex, "name").orElse(""));
+                sendJson(ex, removed ? 200 : 404, JSON.createObjectNode().put("removed", removed));
+            }
             case "POST /api/shutdown" -> {
                 sendJson(ex, 202, JSON.createObjectNode().put("stopping", true));
                 Thread.ofVirtual().start(onShutdownRequest);
@@ -347,7 +378,10 @@ public final class UiServer implements AutoCloseable {
         if (features.isEmpty() || features.size() > 8) {
             throw new IllegalArgumentException("request between 1 and 8 features");
         }
-        Series s = service.series(monitorId, features, points);
+        return seriesJson(service.series(monitorId, features, points));
+    }
+
+    private static ObjectNode seriesJson(Series s) {
         ObjectNode n = JSON.createObjectNode();
         ArrayNode names = n.putArray("features");
         s.features().forEach(f -> names.add(f.apiName()));
@@ -450,10 +484,130 @@ public final class UiServer implements AutoCloseable {
         return n;
     }
 
+    // ─── Datasets, exclusions, presets ──────────────────────────────────────────
+
+    private void datasetPreview(HttpExchange ex) throws IOException {
+        JsonNode body = readJson(ex);
+        DatasetSpec spec = DatasetJson.spec(body.get("spec"));
+        int limit = Math.max(1, Math.min(1000, body.path("limit").asInt(100)));
+        List<DatasetRow> rows = new ArrayList<>();
+        DatasetPipeline.Stats stats = service.preview(spec, limit, rows);
+        ObjectNode n = JSON.createObjectNode();
+        ArrayNode columns = n.putArray("columns");
+        columns.add("time_utc").add("monitor_id");
+        spec.features().forEach(f -> columns.add(f.apiName()));
+        ArrayNode data = n.putArray("rows");
+        for (DatasetRow r : rows) {
+            ArrayNode row = data.addArray().add(r.time().toString()).add(r.monitorId());
+            r.values().forEach(v -> {
+                if (v == null) {
+                    row.addNull();
+                } else {
+                    row.add(v);
+                }
+            });
+        }
+        n.set("stats", DatasetJson.stats(stats));
+        n.put("truncated", stats.written() > rows.size());
+        sendJson(ex, 200, n);
+    }
+
+    private void datasetSeries(HttpExchange ex) throws IOException {
+        JsonNode body = readJson(ex);
+        DatasetSpec spec = DatasetJson.spec(body.get("spec"));
+        JsonNode monitorId = body.get("monitorId");
+        if (monitorId == null || !monitorId.canConvertToInt()) {
+            throw new IllegalArgumentException("monitorId is required");
+        }
+        int points = Math.max(10, Math.min(5000, body.path("points").asInt(600)));
+        List<ComputedFeature> plot = body.has("plot")
+            ? DatasetJson.features(body.get("plot"), "plot")
+            : spec.features().subList(0, Math.min(2, spec.features().size()));
+        sendJson(ex, 200, seriesJson(service.datasetSeries(spec, monitorId.asInt(), plot, points)));
+    }
+
+    private void datasetExport(HttpExchange ex) throws IOException {
+        JsonNode body = readJson(ex);
+        DatasetSpec spec = DatasetJson.spec(body.get("spec"));
+        CsvWriter.Format format = DatasetJson.format(body.get("format"));
+        String file = "dataset-" + FILE_TIME.format(Instant.now()) + ".csv";
+        ex.getResponseHeaders().set("Content-Type", "text/csv; charset=utf-8");
+        ex.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"" + file + "\"");
+        ex.sendResponseHeaders(200, 0); // chunked: rows are streamed as they are produced
+        try (Writer out = new BufferedWriter(new OutputStreamWriter(ex.getResponseBody(), StandardCharsets.UTF_8), 64 * 1024)) {
+            service.export(spec, out, format);
+        } catch (RuntimeException e) {
+            // headers are already sent; the truncated download is the only possible signal
+            LOG.log(System.Logger.Level.ERROR, "export failed after the response started", e);
+        }
+    }
+
+    private ArrayNode exclusions(String monitorList) {
+        List<Integer> ids = new ArrayList<>();
+        for (String part : monitorList.split(",")) {
+            if (!part.isBlank()) {
+                ids.add(Integer.parseInt(part.strip()));
+            }
+        }
+        ArrayNode a = JSON.createArrayNode();
+        service.exclusions(ids).forEach(e -> a.add(exclusionJson(e)));
+        return a;
+    }
+
+    private void addExclusion(HttpExchange ex) throws IOException {
+        JsonNode body = readJson(ex);
+        JsonNode monitorId = body.get("monitorId");
+        if (monitorId == null || !monitorId.canConvertToInt()) {
+            throw new IllegalArgumentException("monitorId is required");
+        }
+        Instant from = Timestamps.parse(body.path("from").asText(null))
+            .orElseThrow(() -> new IllegalArgumentException("from must be a timestamp"));
+        Instant to = Timestamps.parse(body.path("to").asText(null))
+            .orElseThrow(() -> new IllegalArgumentException("to must be a timestamp"));
+        if (!from.isBefore(to)) {
+            throw new IllegalArgumentException("the range must end after it starts");
+        }
+        SampleExclusion e = service.addExclusion(monitorId.asInt(), new TimeWindow(from, to), body.path("reason").asText(""));
+        sendJson(ex, 201, exclusionJson(e));
+    }
+
+    private static ObjectNode exclusionJson(SampleExclusion e) {
+        return JSON.createObjectNode().put("id", e.id()).put("monitorId", e.monitorId())
+            .put("from", e.window().start().toString()).put("to", e.window().end().toString())
+            .put("reason", e.reason()).put("createdAt", e.createdAt().toString());
+    }
+
+    private ArrayNode presets() {
+        ArrayNode a = JSON.createArrayNode();
+        service.presets().forEach(p -> a.addObject().put("name", p.name()).put("savedAt", p.savedAt().toString())
+            .set("spec", DatasetJson.toJson(p.spec())));
+        return a;
+    }
+
+    private void savePreset(HttpExchange ex) throws IOException {
+        JsonNode body = readJson(ex);
+        PresetStore.Preset p = service.savePreset(body.path("name").asText(""), DatasetJson.spec(body.get("spec")));
+        sendJson(ex, 200, JSON.createObjectNode().put("name", p.name()).put("savedAt", p.savedAt().toString()));
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────────────
 
     /** Reads a JSON object of string values; numbers and booleans are accepted as their text. */
     private static Map<String, String> readStringMap(HttpExchange ex) throws IOException {
+        JsonNode root = readJson(ex);
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Map.Entry<String, JsonNode> e : root.properties()) {
+            JsonNode v = e.getValue();
+            if (!v.isValueNode()) {
+                throw new HttpError(400, e.getKey() + " must be a string, number or boolean");
+            }
+            out.put(e.getKey(), v.isNull() ? "" : v.asText());
+        }
+        return out;
+    }
+
+    /** Reads the request body as a JSON object (an empty body counts as {@code {}}). */
+    private static JsonNode readJson(HttpExchange ex) throws IOException {
         byte[] body;
         try (InputStream in = ex.getRequestBody()) {
             body = in.readNBytes(MAX_BODY + 1);
@@ -462,7 +616,7 @@ public final class UiServer implements AutoCloseable {
             throw new HttpError(413, "request body too large");
         }
         if (body.length == 0) {
-            return Map.of();
+            return JSON.createObjectNode();
         }
         JsonNode root;
         try {
@@ -473,15 +627,7 @@ public final class UiServer implements AutoCloseable {
         if (root == null || !root.isObject()) {
             throw new HttpError(400, "body must be a JSON object");
         }
-        Map<String, String> out = new LinkedHashMap<>();
-        for (Map.Entry<String, JsonNode> e : root.properties()) {
-            JsonNode v = e.getValue();
-            if (!v.isValueNode()) {
-                throw new HttpError(400, e.getKey() + " must be a string, number or boolean");
-            }
-            out.put(e.getKey(), v.isNull() ? "" : v.asText());
-        }
-        return out;
+        return root;
     }
 
     private static Optional<String> queryParam(HttpExchange ex, String name) {

@@ -15,6 +15,7 @@
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button role="tab" id="tab-monitors" aria-controls="view-monitors" data-view="monitors">Monitors</button>
       <button role="tab" id="tab-collect" aria-controls="view-collect" data-view="collect">Collect</button>
+      <button role="tab" id="tab-data" aria-controls="view-data" data-view="data">Data</button>
       <button role="tab" id="tab-settings" aria-controls="view-settings" data-view="settings">Settings</button>
     </nav>
     <p class="status" id="status" aria-live="polite"></p>
@@ -91,6 +92,133 @@
         <thead><tr><th scope="col">Started</th><th scope="col">Result</th><th scope="col" class="num">Duration</th><th scope="col" class="num">New rows</th><th scope="col" class="num">Problems</th></tr></thead>
         <tbody></tbody>
       </table>
+    </section>
+
+    <!-- Data -->
+    <section class="view" id="view-data" role="tabpanel" aria-labelledby="tab-data" hidden>
+      <div class="view-head data-head">
+        <div>
+          <h2>Data</h2>
+          <p class="lede">Choose the monitors, columns and rows to export. The collected data is never changed; filters apply to the preview and the CSV file only.</p>
+        </div>
+        <form class="presets" id="preset-form" novalidate>
+          <label>Saved selections <select id="preset-select"><option value="">None saved</option></select></label>
+          <button type="button" id="preset-load">Load</button>
+          <button type="button" class="quiet" id="preset-delete">Delete</button>
+          <label>Save current as <input id="preset-name" maxlength="60" placeholder="e.g. Pump 2 for MATLAB"></label>
+          <button type="submit">Save</button>
+        </form>
+      </div>
+
+      <div class="empty" id="data-empty" hidden>
+        <p>No data yet. Collect once, then come back to choose what to export.</p>
+        <button class="primary" type="button" data-action="collect">Collect now</button>
+      </div>
+
+      <div class="data-layout" id="data-layout">
+        <form class="filters" id="filters" novalidate>
+          <fieldset>
+            <legend>Monitors</legend>
+            <div class="checks" id="filter-monitors"></div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Time range <span class="hint">UTC, both days included</span></legend>
+            <label>From <input type="date" name="from"></label>
+            <label>To <input type="date" name="to"></label>
+          </fieldset>
+
+          <fieldset class="columns">
+            <legend>Columns</legend>
+            <table class="matrix" id="matrix">
+              <thead><tr><th scope="col"><span class="visually-hidden">Measurement</span></th>
+                <th scope="col"><button type="button" class="axis-toggle" data-axis="X">X</button></th>
+                <th scope="col"><button type="button" class="axis-toggle" data-axis="Y">Y</button></th>
+                <th scope="col"><button type="button" class="axis-toggle" data-axis="Z">Z</button></th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <div class="checks" id="single-columns"></div>
+            <p class="column-tools"><button type="button" class="link" id="columns-all">Select all</button>
+              <button type="button" class="link" id="columns-none">Clear</button></p>
+          </fieldset>
+
+          <fieldset class="rows">
+            <legend>Rows</legend>
+            <div id="rules"></div>
+            <button type="button" class="link" id="add-rule">Add an exclusion rule</button>
+            <label>Sampling
+              <select name="sampling">
+                <option value="raw">Every sample</option>
+                <option value="hourly">Hourly means</option>
+                <option value="daily">Daily means</option>
+              </select></label>
+            <label class="check"><input type="checkbox" name="dropIncomplete"> Drop rows with a missing value</label>
+            <label class="check"><input type="checkbox" name="changeOnly"> Only keep rows that changed</label>
+            <div class="change" id="change-options">
+              <label>by more than <input type="number" name="threshold" min="0" step="any" value="2"></label>
+              <label><span class="visually-hidden">Unit</span>
+                <select name="mode"><option value="percent">percent</option><option value="absolute">in absolute value</option></select></label>
+              <p class="hint">In any column, since the last kept row. Each monitor's first and last rows are always kept.</p>
+            </div>
+            <label class="check"><input type="checkbox" name="applyManualExclusions" checked> Leave out manually excluded ranges</label>
+          </fieldset>
+        </form>
+
+        <div class="results">
+          <div class="problems" id="data-problem" role="alert" hidden></div>
+
+          <section class="funnel" aria-labelledby="funnel-title">
+            <h3 id="funnel-title">What the export will contain</h3>
+            <ol id="funnel"></ol>
+          </section>
+
+          <section class="data-chart" aria-labelledby="data-chart-title">
+            <div class="detail-head">
+              <h3 id="data-chart-title">Check the result on a chart</h3>
+              <div class="pickers">
+                <label>Monitor <select id="chart-monitor"></select></label>
+                <label>Column <select id="chart-feature"></select></label>
+              </div>
+            </div>
+            <div class="chart" id="data-chart"></div>
+            <p class="footnote" id="data-chart-note"></p>
+            <form class="exclude-form" id="exclude-form" novalidate hidden>
+              <p id="exclude-range"></p>
+              <label>Reason <input id="exclude-reason" maxlength="500" required placeholder="e.g. Sensor remounted after maintenance"></label>
+              <button type="submit" class="primary">Exclude these samples</button>
+              <button type="button" class="quiet" id="exclude-cancel">Cancel</button>
+            </form>
+          </section>
+
+          <table class="grid" id="exclusions">
+            <caption>Manually excluded ranges</caption>
+            <thead><tr><th scope="col">Monitor</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Reason</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+            <tbody></tbody>
+          </table>
+
+          <section class="export" aria-labelledby="export-title">
+            <h3 id="export-title">Export</h3>
+            <form class="export-form" id="export-form">
+              <label>Format
+                <select id="export-format">
+                  <option value="comma">Comma separated, decimal point</option>
+                  <option value="semicolon">Semicolon separated, decimal comma (Excel in Turkish, French, German)</option>
+                  <option value="tab">Tab separated, decimal point</option>
+                </select></label>
+              <button type="submit" class="primary" id="export-button">Download CSV</button>
+              <p class="result" id="export-result" aria-live="polite"></p>
+            </form>
+          </section>
+
+          <div class="preview">
+            <table class="grid" id="preview">
+              <caption id="preview-caption">Preview</caption>
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Settings -->
