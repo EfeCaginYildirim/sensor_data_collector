@@ -1,6 +1,7 @@
 # Sensor Data Collector
 
 [![CI](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/ci.yml/badge.svg)](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/ci.yml)
+[![Desktop app](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/package.yml/badge.svg)](https://github.com/EfeCaginYildirim/sensor_data_collector/actions/workflows/package.yml)
 
 A Java 21 service that collects vibration and health data from industrial motor sensors through a
 vendor condition-monitoring API and stores it in SQL Server for a predictive-maintenance /
@@ -20,6 +21,30 @@ java -jar target/sensor-data-collector-2.0.0-SNAPSHOT.jar demo   # same idea on 
 
 `ui` starts a small local web server and opens the app in the default browser. It starts in demo
 mode, so it works without credentials; switch to your vendor API in Settings.
+
+### Download and run
+
+The [releases](https://github.com/EfeCaginYildirim/sensor_data_collector/releases) page has a zip
+per platform. It contains its own trimmed Java runtime, so nothing else needs to be installed
+(about 30 MB to download, 45 MB unpacked).
+
+- **Windows**: unzip, open the `SensorDataCollector` folder and double-click
+  `SensorDataCollector.exe`. The app is not code-signed, so the first start shows *Windows
+  protected your PC*: click **More info**, then **Run anyway**.
+- **macOS** (Apple Silicon): unzip and move `SensorDataCollector.app` to Applications. The first
+  time, macOS refuses to open it because the developer is not verified: open **System Settings >
+  Privacy & Security**, scroll down and click **Open Anyway**. If macOS says the app is
+  *damaged*, it was quarantined on download; run
+  `xattr -dr com.apple.quarantine /Applications/SensorDataCollector.app` once.
+
+The app has no window of its own: it lives in the browser tab it opens, and it has no Dock or
+taskbar icon. Double-clicking it again while it runs opens the same session. To stop it, use
+**Settings > Quit app**. Logs are in the `logs` folder of the data folder shown in Settings.
+
+The packages are built and tested on GitHub's Windows and macOS runners: each one is started
+without arguments, like a double-click, then a demo collection runs and a dataset is queried over
+HTTP (`packaging/smoke-test.sh`). To build one yourself on the target OS, with a JDK 21:
+`mvn package -DskipTests && packaging/package.sh target/sensor-data-collector-*.jar 2.0.0 dist`.
 
 ![Monitors view: motors grouped by machine, each with a velocity strip against its alarm thresholds and a trend chart](docs/screenshots/monitors.png)
 
@@ -169,7 +194,7 @@ brings its own:
   transaction boundaries, which covers the SQL Server-specific statements without a server.
   `docker compose up` runs the same code against a real SQL Server.
 
-The suite has 205 tests and runs in under a minute. The web UI is also checked in a real browser
+The suite has 207 tests and runs in under a minute. The web UI is also checked in a real browser
 (Playwright, Chromium) during development: sign-in, a full collection, the chart, settings
 validation, the Data tab end to end (rules, change filter, drag-to-exclude, CSV download, saved
 selections) and the mobile layout, with no console errors. Examples of what it pins down:
@@ -181,7 +206,7 @@ selections) and the mobile layout, with no console errors. Examples of what it p
 - the chart of a filtered dataset has exactly as many rows as its CSV export;
 - the change filter never drops a monitor's first or last row;
 - the UI API refuses foreign `Host` headers, cross-site writes, missing sessions and path traversal;
-- in-flight requests never exceed the configured limit;
+- in-flight requests never exceed the configured limit, and retry jitter is safe to share between them;
 - the scheduler stays at 09:00 local time across DST and survives an `Error` thrown by a run.
 
 The first commit after the original code (`test: characterize …`) adds tests that **fail** against
