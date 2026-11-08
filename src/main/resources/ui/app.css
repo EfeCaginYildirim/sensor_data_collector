@@ -75,6 +75,12 @@ button, input, select { font: inherit; color: inherit; }
 
 .status { margin: 0 0 0 auto; font-size: var(--step--1); color: #b7c4c8; }
 
+.language { display: flex; align-items: center; gap: 0.4rem; font-size: var(--step--1); color: #b7c4c8; }
+.language select { padding: 0.2rem 0.35rem; color: var(--ink); }
+
+/* hide the English text until the saved language has been applied */
+html[data-i18n-pending] body { visibility: hidden; }
+
 .notice {
   background: #fbe9e5;
   color: #7a2416;

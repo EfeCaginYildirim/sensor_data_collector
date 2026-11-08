@@ -107,6 +107,7 @@ class UiServerTest {
         assertTrue(index.body().contains("Sensor Data Collector"));
 
         assertEquals(200, get("/app.js", null).statusCode());
+        assertEquals(200, get("/i18n.js", null).statusCode());
         assertEquals(404, get("/nope.js", null).statusCode());
         assertEquals(404, get("/settings.properties", null).statusCode(), "only known file types are served");
         assertEquals(404, rawStatus("GET /vendor/../../../etc/passwd HTTP/1.1", "127.0.0.1:" + server.baseUri().getPort()));
@@ -121,6 +122,7 @@ class UiServerTest {
         assertEquals("dev", s.get("version").asText());
         assertFalse(s.get("running").asBoolean());
         assertTrue(s.get("nextRun").isNull());
+        assertEquals("en", s.get("language").asText());
         assertEquals(29, json(get("/api/features", cookie)).size());
     }
 
@@ -173,6 +175,19 @@ class UiServerTest {
         assertFalse(ok.body().contains("top-secret"));
         assertEquals("true", json(ok).get("api.password-set").asText());
         assertFalse(get("/api/settings", cookie).body().contains("top-secret"));
+    }
+
+    @Test
+    void theLanguageIsSavedAndReportedInTheStatus() throws Exception {
+        HttpResponse<String> ok = put("/api/language", "{\"language\":\"fr\"}");
+        assertEquals(200, ok.statusCode(), ok.body());
+        assertEquals("fr", json(ok).get("language").asText());
+        assertEquals("fr", json(get("/api/status", cookie)).get("language").asText());
+
+        HttpResponse<String> bad = put("/api/language", "{\"language\":\"de\"}");
+        assertEquals(400, bad.statusCode());
+        assertTrue(json(bad).get("problems").toString().contains("ui.language"), bad.body());
+        assertEquals(400, put("/api/language", "{}").statusCode());
     }
 
     @Test

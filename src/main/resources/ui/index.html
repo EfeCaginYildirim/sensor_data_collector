@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-i18n-pending>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,18 +7,24 @@
   <link rel="stylesheet" href="/vendor/uplot.min.css">
   <link rel="stylesheet" href="/app.css">
   <script src="/vendor/uplot.min.js" defer></script>
+  <script src="/i18n.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
   <header class="bar">
     <h1 class="brand">Sensor Data Collector</h1>
-    <nav class="tabs" role="tablist" aria-label="Sections">
-      <button role="tab" id="tab-monitors" aria-controls="view-monitors" data-view="monitors">Monitors</button>
-      <button role="tab" id="tab-collect" aria-controls="view-collect" data-view="collect">Collect</button>
-      <button role="tab" id="tab-data" aria-controls="view-data" data-view="data">Data</button>
-      <button role="tab" id="tab-settings" aria-controls="view-settings" data-view="settings">Settings</button>
+    <nav class="tabs" role="tablist" aria-label="Sections" data-i18n-aria-label="nav.sections">
+      <button role="tab" id="tab-monitors" aria-controls="view-monitors" data-view="monitors" data-i18n="tab.monitors">Monitors</button>
+      <button role="tab" id="tab-collect" aria-controls="view-collect" data-view="collect" data-i18n="tab.collect">Collect</button>
+      <button role="tab" id="tab-data" aria-controls="view-data" data-view="data" data-i18n="tab.data">Data</button>
+      <button role="tab" id="tab-settings" aria-controls="view-settings" data-view="settings" data-i18n="tab.settings">Settings</button>
     </nav>
     <p class="status" id="status" aria-live="polite"></p>
+    <label class="language"><span data-i18n="lang.label">Language</span>
+      <select id="language">
+        <option value="en" lang="en">English</option>
+        <option value="fr" lang="fr">Français</option>
+      </select></label>
   </header>
 
   <div class="notice" id="notice" role="alert" hidden></div>
@@ -27,21 +33,21 @@
     <!-- Monitors -->
     <section class="view" id="view-monitors" role="tabpanel" aria-labelledby="tab-monitors" hidden>
       <div class="view-head">
-        <h2>Monitors</h2>
+        <h2 data-i18n="tab.monitors">Monitors</h2>
         <p class="lede" id="monitors-lede"></p>
       </div>
 
       <div class="empty" id="monitors-empty" hidden>
-        <p>No data yet. Collect once to fetch the history of every configured monitor.</p>
-        <button class="primary" type="button" data-action="collect">Collect now</button>
+        <p data-i18n="monitors.empty">No data yet. Collect once to fetch the history of every configured monitor.</p>
+        <button class="primary" type="button" data-action="collect" data-i18n="action.collect">Collect now</button>
       </div>
 
       <div class="legend" id="legend" hidden>
-        <span class="legend-label">Velocity against the monitor's thresholds:</span>
-        <span class="swatch zone-normal">Normal</span>
-        <span class="swatch zone-elevated">Elevated</span>
-        <span class="swatch zone-caution">Caution</span>
-        <span class="swatch zone-warning">Warning</span>
+        <span class="legend-label" data-i18n="legend.label">Velocity against the monitor's thresholds:</span>
+        <span class="swatch zone-normal" data-i18n="zone.normal">Normal</span>
+        <span class="swatch zone-elevated" data-i18n="zone.elevated">Elevated</span>
+        <span class="swatch zone-caution" data-i18n="zone.caution">Caution</span>
+        <span class="swatch zone-warning" data-i18n="zone.warning">Warning</span>
       </div>
 
       <div id="machines"></div>
@@ -50,8 +56,8 @@
         <div class="detail-head">
           <h3 id="detail-title"></h3>
           <div class="pickers">
-            <label>Left axis <select id="feature-a"></select></label>
-            <label>Right axis <select id="feature-b"></select></label>
+            <label><span data-i18n="detail.left">Left axis</span> <select id="feature-a"></select></label>
+            <label><span data-i18n="detail.right">Right axis</span> <select id="feature-b"></select></label>
           </div>
         </div>
         <div class="chart" id="chart"></div>
@@ -62,34 +68,34 @@
     <!-- Collect -->
     <section class="view" id="view-collect" role="tabpanel" aria-labelledby="tab-collect" hidden>
       <div class="view-head">
-        <h2>Collect</h2>
-        <p class="lede">Each run fetches everything since the last collected sample, plus a few days of overlap for late data.</p>
+        <h2 data-i18n="tab.collect">Collect</h2>
+        <p class="lede" data-i18n="collect.lede">Each run fetches everything since the last collected sample, plus a few days of overlap for late data.</p>
       </div>
 
       <div class="run-panel">
-        <button class="primary big" type="button" id="collect-button" data-action="collect">Collect now</button>
+        <button class="primary big" type="button" id="collect-button" data-action="collect" data-i18n="action.collect">Collect now</button>
         <div class="run-state">
-          <p id="run-headline">Idle</p>
-          <div class="meter" id="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Collection progress">
+          <p id="run-headline" data-i18n="collect.idle">Idle</p>
+          <div class="meter" id="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Collection progress" data-i18n-aria-label="collect.meter">
             <div class="meter-fill" id="meter-fill"></div>
           </div>
         </div>
       </div>
 
       <table class="grid" id="run-monitors">
-        <caption>Current run</caption>
-        <thead><tr><th scope="col">Monitor</th><th scope="col">State</th><th scope="col" class="num">Time ranges</th><th scope="col">Note</th></tr></thead>
+        <caption data-i18n="collect.current">Current run</caption>
+        <thead><tr><th scope="col" data-i18n="col.monitor">Monitor</th><th scope="col" data-i18n="col.state">State</th><th scope="col" class="num" data-i18n="col.timeRanges">Time ranges</th><th scope="col" data-i18n="col.note">Note</th></tr></thead>
         <tbody></tbody>
       </table>
 
       <details class="summary-box" id="summary-box" hidden>
-        <summary>Report of the last run</summary>
+        <summary data-i18n="collect.report">Report of the last run</summary>
         <pre id="last-summary"></pre>
       </details>
 
       <table class="grid" id="runs">
-        <caption>History</caption>
-        <thead><tr><th scope="col">Started</th><th scope="col">Result</th><th scope="col" class="num">Duration</th><th scope="col" class="num">New rows</th><th scope="col" class="num">Problems</th></tr></thead>
+        <caption data-i18n="collect.history">History</caption>
+        <thead><tr><th scope="col" data-i18n="col.started">Started</th><th scope="col" data-i18n="col.result">Result</th><th scope="col" class="num" data-i18n="col.duration">Duration</th><th scope="col" class="num" data-i18n="col.newRows">New rows</th><th scope="col" class="num" data-i18n="col.problems">Problems</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -98,69 +104,69 @@
     <section class="view" id="view-data" role="tabpanel" aria-labelledby="tab-data" hidden>
       <div class="view-head data-head">
         <div>
-          <h2>Data</h2>
-          <p class="lede">Choose the monitors, columns and rows to export. The collected data is never changed; filters apply to the preview and the CSV file only.</p>
+          <h2 data-i18n="tab.data">Data</h2>
+          <p class="lede" data-i18n="data.lede">Choose the monitors, columns and rows to export. The collected data is never changed; filters apply to the preview and the CSV file only.</p>
         </div>
         <form class="presets" id="preset-form" novalidate>
-          <label>Saved selections <select id="preset-select"><option value="">None saved</option></select></label>
-          <button type="button" id="preset-load">Load</button>
-          <button type="button" class="quiet" id="preset-delete">Delete</button>
-          <label>Save current as <input id="preset-name" maxlength="60" placeholder="e.g. Pump 2 for MATLAB"></label>
-          <button type="submit">Save</button>
+          <label><span data-i18n="presets.saved">Saved selections</span> <select id="preset-select"><option value="" data-i18n="presets.none">None saved</option></select></label>
+          <button type="button" id="preset-load" data-i18n="presets.load">Load</button>
+          <button type="button" class="quiet" id="preset-delete" data-i18n="presets.delete">Delete</button>
+          <label><span data-i18n="presets.saveAs">Save current as</span> <input id="preset-name" maxlength="60" placeholder="e.g. Pump 2 for MATLAB" data-i18n-placeholder="presets.placeholder"></label>
+          <button type="submit" data-i18n="presets.save">Save</button>
         </form>
       </div>
 
       <div class="empty" id="data-empty" hidden>
-        <p>No data yet. Collect once, then come back to choose what to export.</p>
-        <button class="primary" type="button" data-action="collect">Collect now</button>
+        <p data-i18n="data.empty">No data yet. Collect once, then come back to choose what to export.</p>
+        <button class="primary" type="button" data-action="collect" data-i18n="action.collect">Collect now</button>
       </div>
 
       <div class="data-layout" id="data-layout">
         <form class="filters" id="filters" novalidate>
           <fieldset>
-            <legend>Monitors</legend>
+            <legend data-i18n="filters.monitors">Monitors</legend>
             <div class="checks" id="filter-monitors"></div>
           </fieldset>
 
           <fieldset>
-            <legend>Time range <span class="hint">UTC, both days included</span></legend>
-            <label>From <input type="date" name="from"></label>
-            <label>To <input type="date" name="to"></label>
+            <legend><span data-i18n="filters.range">Time range</span> <span class="hint" data-i18n="filters.rangeHint">UTC, both days included</span></legend>
+            <label><span data-i18n="filters.from">From</span> <input type="date" name="from"></label>
+            <label><span data-i18n="filters.to">To</span> <input type="date" name="to"></label>
           </fieldset>
 
           <fieldset class="columns">
-            <legend>Columns</legend>
+            <legend data-i18n="filters.columns">Columns</legend>
             <table class="matrix" id="matrix">
-              <thead><tr><th scope="col"><span class="visually-hidden">Measurement</span></th>
+              <thead><tr><th scope="col"><span class="visually-hidden" data-i18n="filters.measurement">Measurement</span></th>
                 <th scope="col"><button type="button" class="axis-toggle" data-axis="X">X</button></th>
                 <th scope="col"><button type="button" class="axis-toggle" data-axis="Y">Y</button></th>
                 <th scope="col"><button type="button" class="axis-toggle" data-axis="Z">Z</button></th></tr></thead>
               <tbody></tbody>
             </table>
             <div class="checks" id="single-columns"></div>
-            <p class="column-tools"><button type="button" class="link" id="columns-all">Select all</button>
-              <button type="button" class="link" id="columns-none">Clear</button></p>
+            <p class="column-tools"><button type="button" class="link" id="columns-all" data-i18n="filters.all">Select all</button>
+              <button type="button" class="link" id="columns-none" data-i18n="filters.none">Clear</button></p>
           </fieldset>
 
           <fieldset class="rows">
-            <legend>Rows</legend>
+            <legend data-i18n="filters.rows">Rows</legend>
             <div id="rules"></div>
-            <button type="button" class="link" id="add-rule">Add an exclusion rule</button>
-            <label>Sampling
+            <button type="button" class="link" id="add-rule" data-i18n="filters.addRule">Add an exclusion rule</button>
+            <label><span data-i18n="filters.sampling">Sampling</span>
               <select name="sampling">
-                <option value="raw">Every sample</option>
-                <option value="hourly">Hourly means</option>
-                <option value="daily">Daily means</option>
+                <option value="raw" data-i18n="sampling.raw">Every sample</option>
+                <option value="hourly" data-i18n="sampling.hourly">Hourly means</option>
+                <option value="daily" data-i18n="sampling.daily">Daily means</option>
               </select></label>
-            <label class="check"><input type="checkbox" name="dropIncomplete"> Drop rows with a missing value</label>
-            <label class="check"><input type="checkbox" name="changeOnly"> Only keep rows that changed</label>
+            <label class="check"><input type="checkbox" name="dropIncomplete"> <span data-i18n="filters.dropIncomplete">Drop rows with a missing value</span></label>
+            <label class="check"><input type="checkbox" name="changeOnly"> <span data-i18n="filters.changeOnly">Only keep rows that changed</span></label>
             <div class="change" id="change-options">
-              <label>by more than <input type="number" name="threshold" min="0" step="any" value="2"></label>
-              <label><span class="visually-hidden">Unit</span>
-                <select name="mode"><option value="percent">percent</option><option value="absolute">in absolute value</option></select></label>
-              <p class="hint">In any column, since the last kept row. Each monitor's first and last rows are always kept.</p>
+              <label><span data-i18n="filters.byMore">by more than</span> <input type="number" name="threshold" min="0" step="any" value="2"></label>
+              <label><span class="visually-hidden" data-i18n="filters.unit">Unit</span>
+                <select name="mode"><option value="percent" data-i18n="filters.percent">percent</option><option value="absolute" data-i18n="filters.absolute">in absolute value</option></select></label>
+              <p class="hint" data-i18n="filters.changeHint">In any column, since the last kept row. Each monitor's first and last rows are always kept.</p>
             </div>
-            <label class="check"><input type="checkbox" name="applyManualExclusions" checked> Leave out manually excluded ranges</label>
+            <label class="check"><input type="checkbox" name="applyManualExclusions" checked> <span data-i18n="filters.manual">Leave out manually excluded ranges</span></label>
           </fieldset>
         </form>
 
@@ -168,51 +174,51 @@
           <div class="problems" id="data-problem" role="alert" hidden></div>
 
           <section class="funnel" aria-labelledby="funnel-title">
-            <h3 id="funnel-title">What the export will contain</h3>
+            <h3 id="funnel-title" data-i18n="funnel.title">What the export will contain</h3>
             <ol id="funnel"></ol>
           </section>
 
           <section class="data-chart" aria-labelledby="data-chart-title">
             <div class="detail-head">
-              <h3 id="data-chart-title">Check the result on a chart</h3>
+              <h3 id="data-chart-title" data-i18n="dataChart.title">Check the result on a chart</h3>
               <div class="pickers">
-                <label>Monitor <select id="chart-monitor"></select></label>
-                <label>Column <select id="chart-feature"></select></label>
+                <label><span data-i18n="dataChart.monitor">Monitor</span> <select id="chart-monitor"></select></label>
+                <label><span data-i18n="dataChart.column">Column</span> <select id="chart-feature"></select></label>
               </div>
             </div>
             <div class="chart" id="data-chart"></div>
             <p class="footnote" id="data-chart-note"></p>
             <form class="exclude-form" id="exclude-form" novalidate hidden>
               <p id="exclude-range"></p>
-              <label>Reason <input id="exclude-reason" maxlength="500" required placeholder="e.g. Sensor remounted after maintenance"></label>
-              <button type="submit" class="primary">Exclude these samples</button>
-              <button type="button" class="quiet" id="exclude-cancel">Cancel</button>
+              <label><span data-i18n="exclude.reason">Reason</span> <input id="exclude-reason" maxlength="500" required placeholder="e.g. Sensor remounted after maintenance" data-i18n-placeholder="exclude.placeholder"></label>
+              <button type="submit" class="primary" data-i18n="exclude.submit">Exclude these samples</button>
+              <button type="button" class="quiet" id="exclude-cancel" data-i18n="exclude.cancel">Cancel</button>
             </form>
           </section>
 
           <table class="grid" id="exclusions">
-            <caption>Manually excluded ranges</caption>
-            <thead><tr><th scope="col">Monitor</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Reason</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+            <caption data-i18n="exclusions.caption">Manually excluded ranges</caption>
+            <thead><tr><th scope="col" data-i18n="col.monitor">Monitor</th><th scope="col" data-i18n="col.from">From</th><th scope="col" data-i18n="col.to">To</th><th scope="col" data-i18n="col.reason">Reason</th><th scope="col"><span class="visually-hidden" data-i18n="col.actions">Actions</span></th></tr></thead>
             <tbody></tbody>
           </table>
 
           <section class="export" aria-labelledby="export-title">
-            <h3 id="export-title">Export</h3>
+            <h3 id="export-title" data-i18n="export.title">Export</h3>
             <form class="export-form" id="export-form">
-              <label>Format
+              <label><span data-i18n="export.format">Format</span>
                 <select id="export-format">
-                  <option value="comma">Comma separated, decimal point</option>
-                  <option value="semicolon">Semicolon separated, decimal comma (Excel in Turkish, French, German)</option>
-                  <option value="tab">Tab separated, decimal point</option>
+                  <option value="comma" data-i18n="export.comma">Comma separated, decimal point</option>
+                  <option value="semicolon" data-i18n="export.semicolon">Semicolon separated, decimal comma (Excel in Turkish, French, German)</option>
+                  <option value="tab" data-i18n="export.tab">Tab separated, decimal point</option>
                 </select></label>
-              <button type="submit" class="primary" id="export-button">Download CSV</button>
+              <button type="submit" class="primary" id="export-button" data-i18n="export.download">Download CSV</button>
               <p class="result" id="export-result" aria-live="polite"></p>
             </form>
           </section>
 
           <div class="preview">
             <table class="grid" id="preview">
-              <caption id="preview-caption">Preview</caption>
+              <caption id="preview-caption" data-i18n="preview.caption">Preview</caption>
               <thead></thead>
               <tbody></tbody>
             </table>
@@ -224,7 +230,7 @@
     <!-- Settings -->
     <section class="view" id="view-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
       <div class="view-head">
-        <h2>Settings</h2>
+        <h2 data-i18n="tab.settings">Settings</h2>
         <p class="lede" id="data-dir"></p>
       </div>
 
@@ -232,49 +238,49 @@
         <div class="problems" id="problems" role="alert" hidden></div>
 
         <fieldset class="modes">
-          <legend>Data source</legend>
+          <legend data-i18n="settings.source">Data source</legend>
           <label class="mode"><input type="radio" name="ui.mode" value="demo">
-            <span><strong>Demo</strong> Synthetic motors served by a built-in fake vendor API. Nothing to configure.</span></label>
+            <span><strong data-i18n="settings.demo">Demo</strong> <span data-i18n="settings.demoText">Synthetic motors served by a built-in fake vendor API. Nothing to configure.</span></span></label>
           <label class="mode"><input type="radio" name="ui.mode" value="api">
-            <span><strong>Vendor API</strong> Collect from your condition-monitoring account.</span></label>
+            <span><strong data-i18n="settings.api">Vendor API</strong> <span data-i18n="settings.apiText">Collect from your condition-monitoring account.</span></span></label>
         </fieldset>
 
         <fieldset data-mode="demo">
-          <legend>Demo scenario</legend>
-          <label>Motors <input name="demo.monitors" type="number" min="1" max="100" required></label>
-          <label>Days of history <input name="demo.history-days" type="number" min="1" max="3650" required></label>
-          <label>Random seed <input name="demo.seed" type="number" required></label>
+          <legend data-i18n="settings.scenario">Demo scenario</legend>
+          <label><span data-i18n="settings.motors">Motors</span> <input name="demo.monitors" type="number" min="1" max="100" required></label>
+          <label><span data-i18n="settings.days">Days of history</span> <input name="demo.history-days" type="number" min="1" max="3650" required></label>
+          <label><span data-i18n="settings.seed">Random seed</span> <input name="demo.seed" type="number" required></label>
         </fieldset>
 
         <fieldset data-mode="api">
-          <legend>Vendor API</legend>
-          <label class="wide">Base URL <input name="api.base-url" type="url" placeholder="https://api.example.com/v1" autocomplete="url"></label>
-          <label>Username <input name="api.username" autocomplete="username"></label>
-          <label>Password <input name="api.password" type="password" autocomplete="current-password"></label>
-          <label>Plant id <input name="collection.plant-id" type="number" min="1"></label>
-          <label class="wide">Monitor ids <input name="collection.monitor-ids" placeholder="11111, 22222, 33333"></label>
-          <label>First day to collect <input name="collection.initial-start-date" type="date"></label>
-          <label>Parallel requests <input name="api.max-concurrent-requests" type="number" min="1" max="64"></label>
+          <legend data-i18n="settings.api">Vendor API</legend>
+          <label class="wide"><span data-i18n="settings.baseUrl">Base URL</span> <input name="api.base-url" type="url" placeholder="https://api.example.com/v1" autocomplete="url"></label>
+          <label><span data-i18n="settings.username">Username</span> <input name="api.username" autocomplete="username"></label>
+          <label><span data-i18n="settings.password">Password</span> <input name="api.password" type="password" autocomplete="current-password"></label>
+          <label><span data-i18n="settings.plant">Plant id</span> <input name="collection.plant-id" type="number" min="1"></label>
+          <label class="wide"><span data-i18n="settings.monitorIds">Monitor ids</span> <input name="collection.monitor-ids" placeholder="11111, 22222, 33333"></label>
+          <label><span data-i18n="settings.firstDay">First day to collect</span> <input name="collection.initial-start-date" type="date"></label>
+          <label><span data-i18n="settings.parallel">Parallel requests</span> <input name="api.max-concurrent-requests" type="number" min="1" max="64"></label>
         </fieldset>
 
         <fieldset>
-          <legend>Schedule</legend>
-          <label class="check"><input name="schedule.enabled" type="checkbox"> Collect every day while the app is open</label>
-          <label>Time <input name="schedule.daily-time" type="time" required></label>
-          <label class="wide">Time zone <input name="schedule.zone" list="zones" required></label>
+          <legend data-i18n="settings.schedule">Schedule</legend>
+          <label class="check"><input name="schedule.enabled" type="checkbox"> <span data-i18n="settings.daily">Collect every day while the app is open</span></label>
+          <label><span data-i18n="settings.time">Time</span> <input name="schedule.daily-time" type="time" required></label>
+          <label class="wide"><span data-i18n="settings.zone">Time zone</span> <input name="schedule.zone" list="zones" required></label>
           <datalist id="zones"></datalist>
         </fieldset>
 
         <div class="actions">
-          <button class="primary" type="submit">Save settings</button>
-          <button type="button" id="test-button">Test connection</button>
+          <button class="primary" type="submit" data-i18n="settings.save">Save settings</button>
+          <button type="button" id="test-button" data-i18n="settings.test">Test connection</button>
           <p class="result" id="settings-result" aria-live="polite"></p>
         </div>
       </form>
 
       <div class="quit">
-        <p>Collection stops when the app is closed. Data and settings stay in the folder above.</p>
-        <button type="button" class="quiet" id="quit-button">Quit app</button>
+        <p data-i18n="quit.text">Collection stops when the app is closed. Data and settings stay in the folder above.</p>
+        <button type="button" class="quiet" id="quit-button" data-i18n="quit.button">Quit app</button>
       </div>
     </section>
   </main>

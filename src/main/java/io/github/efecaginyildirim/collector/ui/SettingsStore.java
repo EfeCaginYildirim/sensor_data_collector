@@ -31,7 +31,7 @@ import java.util.Set;
  * <p>Keys deliberately match the CLI configuration ({@code api.base-url}, {@code collection.monitor-ids}
  * …), so validation is shared with {@link ConfigLoader} and the same names appear in error
  * messages, the JSON API and the HTML form. A few keys exist only here: {@code ui.mode},
- * {@code demo.*} and {@code schedule.enabled}.
+ * {@code ui.language}, {@code demo.*} and {@code schedule.enabled}.
  *
  * <p>The API password is saved, as decided for this app, in plain text — but the file is written
  * with owner-only permissions on POSIX systems, and {@code %APPDATA%} is private to the user on
@@ -49,12 +49,15 @@ public final class SettingsStore {
 
     /** Every key the store accepts, in display order. */
     public static final List<String> KEYS = List.of(
-        "ui.mode",
+        "ui.mode", "ui.language",
         "demo.monitors", "demo.history-days", "demo.seed", "demo.reference-time",
         "api.base-url", "api.username", "api.password", "api.max-concurrent-requests",
         "collection.plant-id", "collection.monitor-ids", "collection.initial-start-date",
         "collection.overlap", "collection.chunk",
         "schedule.enabled", "schedule.daily-time", "schedule.zone");
+
+    /** Languages the browser UI is translated into; the first is the default. */
+    public static final List<String> LANGUAGES = List.of("en", "fr");
 
     /** Keys whose values are never returned to clients. */
     public static final Set<String> SECRET_KEYS = Set.of("api.password");
@@ -132,6 +135,21 @@ public final class SettingsStore {
     }
 
     /**
+     * Saves the UI language on its own, so it can be switched even while other settings are
+     * incomplete (for example API mode chosen but not yet configured).
+     *
+     * @param language one of {@link #LANGUAGES}
+     * @return problems found; empty if the language was saved
+     */
+    public synchronized List<String> setLanguage(String language) {
+        List<String> problems = checkLanguage(language);
+        if (problems.isEmpty()) {
+            put("ui.language", language);
+        }
+        return problems;
+    }
+
+    /**
      * Sets an internal value such as the demo reference time, without validation.
      *
      * @param key   one of {@link #KEYS}
@@ -183,6 +201,7 @@ public final class SettingsStore {
         if (!mode.equals("demo") && !mode.equals("api")) {
             problems.add("ui.mode must be 'demo' or 'api'");
         }
+        problems.addAll(checkLanguage(s.getOrDefault("ui.language", "")));
         checkInt(s, "demo.monitors", 1, 100, problems);
         checkInt(s, "demo.history-days", 1, 3650, problems);
         try {
@@ -214,6 +233,10 @@ public final class SettingsStore {
         return problems;
     }
 
+    private static List<String> checkLanguage(String language) {
+        return LANGUAGES.contains(language) ? List.of() : List.of("ui.language must be 'en' or 'fr'");
+    }
+
     private static void checkInt(Map<String, String> s, String key, int min, int max, List<String> problems) {
         try {
             int v = Integer.parseInt(s.getOrDefault(key, ""));
@@ -231,6 +254,7 @@ public final class SettingsStore {
             d.put(key, "");
         }
         d.put("ui.mode", "demo");
+        d.put("ui.language", LANGUAGES.get(0));
         d.put("demo.monitors", "6");
         d.put("demo.history-days", "90");
         d.put("demo.seed", "42");
