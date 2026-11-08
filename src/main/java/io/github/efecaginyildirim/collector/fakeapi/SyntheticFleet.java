@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.SplittableRandom;
@@ -204,7 +205,7 @@ public final class SyntheticFleet {
             if (i % 2 == 0) {
                 ObjectNode machine = Objects.requireNonNull(machines).addObject();
                 machine.put("id", plantId * 10_000 + machineIndex + 1);
-                machine.put("name", String.format("Motor M-%02d", machineIndex + 1));
+                machine.put("name", String.format(Locale.ROOT, "Motor M-%02d", machineIndex + 1));
                 machine.put("monitorCount", Math.min(2, ids.size() - i));
                 monitors = machine.putArray("monitors");
             }
@@ -219,7 +220,7 @@ public final class SyntheticFleet {
         ObjectNode m = MAPPER.createObjectNode();
         m.put("id", p.monitorId());
         m.put("name", "Bearing " + side);
-        m.put("deviceIdentifier", String.format("SN-%06d", p.monitorId()));
+        m.put("deviceIdentifier", String.format(Locale.ROOT, "SN-%06d", p.monitorId()));
         m.put("orientationCode", side.equals("DE") ? "H" : "V");
         m.put("subscriptionStart", "2024-01-01");
         m.put("subscriptionEnd", "2027-01-01");
