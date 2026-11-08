@@ -56,6 +56,10 @@ HTTP (`packaging/smoke-test.sh`). To build one yourself on the target OS, with a
 - **Data** — choose what goes into a CSV file without touching the collected data (see below).
 - **Settings** — demo or vendor API, credentials (the password is saved in your user folder and
   never sent back to the browser), and an optional daily schedule.
+- **Language** — English or French, chosen in the top bar and remembered with the settings
+  (English on first launch). Numbers, dates and chart axes follow the chosen language rather than
+  the computer's or the browser's: `2,80` and `8 nov. 2026, 13:30` in French. Console and log
+  output always use a decimal point, whatever the system locale.
 
 ### Data tab
 
@@ -195,7 +199,7 @@ brings its own:
   transaction boundaries, which covers the SQL Server-specific statements without a server.
   `docker compose up` runs the same code against a real SQL Server.
 
-The suite has 207 tests and runs in under a minute. The web UI is also checked in a real browser
+The suite has 215 tests and runs in under a minute. The web UI is also checked in a real browser
 (Playwright, Chromium) during development: sign-in, a full collection, the chart, settings
 validation, the Data tab end to end (rules, change filter, drag-to-exclude, CSV download, saved
 selections) and the mobile layout, with no console errors. Examples of what it pins down:

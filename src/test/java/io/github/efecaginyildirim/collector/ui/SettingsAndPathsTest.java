@@ -119,6 +119,31 @@ class SettingsAndPathsTest {
     }
 
     @Test
+    void languageIsEnglishUntilChangedAndCanBeSavedOnItsOwn(@TempDir Path dir) {
+        Path file = dir.resolve("s.properties");
+        SettingsStore store = new SettingsStore(file, PARIS);
+        assertEquals("en", store.load().get("ui.language"));
+
+        assertEquals(List.of(), store.setLanguage("fr"));
+        assertEquals("fr", new SettingsStore(file, PARIS).load().get("ui.language"), "survives a restart");
+
+        assertEquals(List.of("ui.language must be 'en' or 'fr'"), store.setLanguage("de"));
+        assertEquals(List.of("ui.language must be 'en' or 'fr'"), store.update(Map.of("ui.language", "tr")));
+        assertEquals("fr", store.load().get("ui.language"));
+    }
+
+    @Test
+    void languageCanBeSavedEvenWhenOtherSettingsAreIncomplete(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("s.properties");
+        Files.writeString(file, "ui.mode=api\n", StandardCharsets.UTF_8);
+        SettingsStore store = new SettingsStore(file, PARIS);
+
+        assertEquals(List.of(), store.setLanguage("fr"));
+        assertEquals("fr", store.load().get("ui.language"));
+        assertEquals("api", store.load().get("ui.mode"), "other settings are untouched");
+    }
+
+    @Test
     void settingsFileIsPrivateToTheUser(@TempDir Path dir) throws Exception {
         Path file = dir.resolve("s.properties");
         new SettingsStore(file, PARIS).update(apiSettings("pw"));

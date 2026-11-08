@@ -385,6 +385,21 @@ public final class CollectorService implements AutoCloseable {
         return problems;
     }
 
+    /** @return the saved UI language, one of {@link SettingsStore#LANGUAGES} */
+    public String language() {
+        return settings.load().get("ui.language");
+    }
+
+    /**
+     * Saves the UI language without touching or re-validating the other settings.
+     *
+     * @param language one of {@link SettingsStore#LANGUAGES}
+     * @return problems; empty if saved
+     */
+    public List<String> setLanguage(String language) {
+        return settings.setLanguage(language);
+    }
+
     /**
      * Checks that the API is reachable with the given (unsaved) changes applied to the current settings.
      *

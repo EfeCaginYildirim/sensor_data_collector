@@ -42,6 +42,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -195,10 +196,10 @@ public final class Main {
             out.println("== Run 2: one day later - only watermark minus 3 days overlap is fetched ==");
             RunReport second = job.run(new RunHistoryListener(repo));
             out.print(second.summary());
-            out.printf("HTTP requests: %d for the backfill, %d for the incremental run%n%n", backfillRequests, server.requests().size());
+            out.printf(Locale.ROOT, "HTTP requests: %d for the backfill, %d for the incremental run%n%n", backfillRequests, server.requests().size());
 
             out.print(healthTable(repo, ids));
-            out.printf("Run history: %d runs stored%n", repo.recentRuns(10).size());
+            out.printf(Locale.ROOT, "Run history: %d runs stored%n", repo.recentRuns(10).size());
             return second.status().exitCode();
         }
     }
@@ -213,8 +214,8 @@ public final class Main {
         Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         List<Integer> ids = monitorIds(monitorCount);
         SyntheticFleet fleet = SyntheticFleet.create(1, ids, SyntheticFleet.Options.defaults(7, now));
-        out.printf("Benchmark: %d monitors, %d days of history, %d ms latency per request%n", monitorCount, days, latencyMs);
-        out.printf("%-12s %-10s %-10s %-9s %s%n", "concurrency", "elapsed", "requests", "speedup", "max in flight");
+        out.printf(Locale.ROOT, "Benchmark: %d monitors, %d days of history, %d ms latency per request%n", monitorCount, days, latencyMs);
+        out.printf(Locale.ROOT, "%-12s %-10s %-10s %-9s %s%n", "concurrency", "elapsed", "requests", "speedup", "max in flight");
 
         try (FakeMonitoringServer server = FakeMonitoringServer.start(fleet, Clock.fixed(now, ZoneOffset.UTC), "demo", "demo")) {
             server.setLatency(Duration.ofMillis(latencyMs));
@@ -237,8 +238,8 @@ public final class Main {
                     return 1;
                 }
                 baseline = baseline == 0 ? seconds : baseline;
-                out.printf("%-12d %-10s %-10d %-9s %d%n", level, String.format("%.2f s", seconds),
-                    server.requests().size(), String.format("%.1fx", baseline / seconds), server.maxConcurrentRequests());
+                out.printf(Locale.ROOT, "%-12d %-10s %-10d %-9s %d%n", level, String.format(Locale.ROOT, "%.2f s", seconds),
+                    server.requests().size(), String.format(Locale.ROOT, "%.1fx", baseline / seconds), server.maxConcurrentRequests());
             }
         }
         return 0;
@@ -354,7 +355,7 @@ public final class Main {
     /** Compares the first and last week of key bearing indicators per monitor. */
     static String healthTable(MotorDataReader reader, List<Integer> ids) {
         StringBuilder sb = new StringBuilder("Fleet health (first week -> last week of collected data)\n");
-        sb.append(String.format("  %-6s %-24s %-7s %-22s %s%n", "id", "monitor", "health", "kurtosis X", "BPFO amplitude"));
+        sb.append(String.format(Locale.ROOT, "  %-6s %-24s %-7s %-22s %s%n", "id", "monitor", "health", "kurtosis X", "BPFO amplitude"));
         for (MonitorSummary m : reader.monitors()) {
             if (!ids.contains(m.monitorId()) || m.collectedUntil().isEmpty() || m.computedSamples() == 0) {
                 continue;
@@ -366,7 +367,7 @@ public final class Main {
             Instant first = rows.get(0).time();
             Instant last = rows.get(rows.size() - 1).time();
             Integer health = m.latestStatus().map(s -> s.status().healthScore()).orElse(null);
-            sb.append(String.format("  %-6d %-24s %-7s %-22s %s%n", m.monitorId(), m.machineName() + " " + m.monitorName(),
+            sb.append(String.format(Locale.ROOT, "  %-6d %-24s %-7s %-22s %s%n", m.monitorId(), m.machineName() + " " + m.monitorName(),
                 health == null ? "-" : health, trend(rows, 0, first, last), trend(rows, 1, first, last)));
         }
         return sb.toString();
@@ -376,7 +377,7 @@ public final class Main {
         double early = mean(rows, column, first, first.plus(Duration.ofDays(7)));
         double late = mean(rows, column, last.minus(Duration.ofDays(7)), last.plusSeconds(1));
         String arrow = late > early * 1.25 ? "  RISING" : late < early * 0.8 ? "  FALLING" : "";
-        return String.format("%.2f -> %.2f%s", early, late, arrow);
+        return String.format(Locale.ROOT, "%.2f -> %.2f%s", early, late, arrow);
     }
 
     private static double mean(List<DatasetRow> rows, int column, Instant from, Instant to) {

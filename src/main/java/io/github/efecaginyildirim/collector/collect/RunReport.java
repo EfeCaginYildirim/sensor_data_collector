@@ -5,6 +5,7 @@ import io.github.efecaginyildirim.collector.time.TimeWindow;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -95,10 +96,10 @@ public record RunReport(String runId, Instant startedAt, Duration elapsed, Statu
     /** @return a multi-line, human-readable summary for logs and the console */
     public String summary() {
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("Run %s %s in %.1f s (started %s)%n", runId, status, elapsed.toMillis() / 1000.0, startedAt));
+        sb.append(String.format(Locale.ROOT, "Run %s %s in %.1f s (started %s)%n", runId, status, elapsed.toMillis() / 1000.0, startedAt));
         failure.ifPresent(f -> sb.append("  failure: ").append(f).append('\n'));
         for (MonitorOutcome m : monitors) {
-            sb.append(String.format("  monitor %-6d %-10s basic=%-5d computed=%-6d new=%-6d until=%s%s%n",
+            sb.append(String.format(Locale.ROOT, "  monitor %-6d %-10s basic=%-5d computed=%-6d new=%-6d until=%s%s%n",
                 m.monitorId(), m.outcome(), m.basicSaved(), m.computedSaved(), m.newRows(),
                 m.collectedUntil().map(Instant::toString).orElse("-"),
                 m.error().map(e -> "  error: " + e).orElse("")));

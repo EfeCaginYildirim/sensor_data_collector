@@ -246,6 +246,7 @@ public final class UiServer implements AutoCloseable {
             case "GET /api/progress" -> sendJson(ex, 200, progress());
             case "GET /api/settings" -> sendJson(ex, 200, settings());
             case "PUT /api/settings" -> saveSettings(ex);
+            case "PUT /api/language" -> saveLanguage(ex);
             case "POST /api/settings/test" -> sendJson(ex, 200, connectionCheck(service.testConnection(readStringMap(ex))));
             case "POST /api/dataset/preview" -> datasetPreview(ex);
             case "POST /api/dataset/series" -> datasetSeries(ex);
@@ -307,6 +308,7 @@ public final class UiServer implements AutoCloseable {
         n.put("mode", s.mode().name().toLowerCase(Locale.ROOT));
         n.put("dataDirectory", s.dataDirectory().toAbsolutePath().toString());
         n.put("running", s.running());
+        n.put("language", service.language());
         putOptional(n, "nextRun", s.nextRun().map(z -> z.toOffsetDateTime().toString()));
         putOptional(n, "nextRunZone", s.nextRun().map(z -> z.getZone().getId()));
         return n;
@@ -459,6 +461,18 @@ public final class UiServer implements AutoCloseable {
         ObjectNode n = JSON.createObjectNode();
         service.settingsForDisplay().forEach(n::put);
         return n;
+    }
+
+    private void saveLanguage(HttpExchange ex) throws IOException {
+        String language = readStringMap(ex).getOrDefault("language", "");
+        List<String> problems = service.setLanguage(language);
+        if (problems.isEmpty()) {
+            sendJson(ex, 200, JSON.createObjectNode().put("saved", true).put("language", language));
+        } else {
+            ObjectNode n = JSON.createObjectNode().put("saved", false);
+            problems.forEach(n.putArray("problems")::add);
+            sendJson(ex, 400, n);
+        }
     }
 
     private void saveSettings(HttpExchange ex) throws IOException {

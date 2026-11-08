@@ -4,29 +4,20 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
-const FEATURE_NAMES = (() => {
-  const axes = { X: " X", Y: " Y", Z: " Z" };
-  const families = {
-    KURTACCL: "Kurtosis", PPACCL: "Peak-to-peak acceleration", CRESTACCL: "Crest factor",
-    GRMSACCL: "RMS acceleration (g)", PPSW: "Shock-wave peak-to-peak", SWRMS: "Shock-wave RMS",
-    VRMS: "RMS velocity (mm/s)",
-  };
-  const single = {
-    IDLE: "Idle fraction", RPM: "Speed (rpm)", BPFI: "BPFI amplitude (inner race)",
-    BPFO: "BPFO amplitude (outer race)", BSF: "BSF amplitude (ball spin)", FTF: "FTF amplitude (cage)",
-    LOAD: "Load (%)", TA: "Temperature",
-  };
-  return (name) => {
-    if (single[name]) return single[name];
-    const axis = name.slice(-1);
-    const family = families[name.slice(0, -1)];
-    return family ? family + (axes[axis] || "") : name;
-  };
-})();
+const { t } = I18N;
 
-const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
-const formatTime = (iso) => (iso ? dateTime.format(new Date(iso)) : "never");
-const formatNumber = (v, digits = 2) => (v === null || v === undefined ? "–" : Number(v).toFixed(digits));
+/** "KURTACCLX" becomes "Kurtosis X", "BPFO" "BPFO amplitude (outer race)", in the chosen language. */
+const FEATURE_NAMES = (name) => {
+  const single = `feature.${name}`;
+  if (t(single) !== single) return t(single);
+  const family = `feature.${name.slice(0, -1)}`;
+  const axis = name.slice(-1);
+  return t(family) !== family && ["X", "Y", "Z"].includes(axis) ? `${t(family)} ${axis}` : name;
+};
+
+const formatTime = (iso) => (iso ? I18N.dateTime(new Date(iso)) : t("time.never"));
+const formatNumber = I18N.number;
+const formatCount = I18N.integer;
 
 const state = {
   view: "monitors",
@@ -58,12 +49,12 @@ async function api(path, { method = "GET", body } = {}) {
   try {
     response = await fetch(path, options);
   } catch (e) {
-    showNotice("The app is not running. Start it again to continue.");
+    showNotice(t("notice.notRunning"));
     throw e;
   }
   const data = response.status === 204 ? null : await response.json().catch(() => null);
   if (response.status === 401) {
-    showNotice("This window is not signed in. Close it and start the app again; it opens a signed-in window.");
+    showNotice(t("notice.signedOut"));
   }
   if (!response.ok) throw new ApiError(response.status, data);
   return data;
@@ -92,18 +83,16 @@ function show(view) {
 
 async function loadStatus() {
   const s = await api("/api/status");
-  const source = s.mode === "demo" ? "Demo data" : "Vendor API";
-  const schedule = s.nextRun ? `next collection ${formatTime(s.nextRun)}` : "daily schedule off";
-  $("#status").textContent = `${source}, ${schedule}. Version ${s.version}`;
-  $("#data-dir").textContent = `Settings and data are kept in ${s.dataDirectory}`;
+  const source = t(s.mode === "demo" ? "status.demo" : "status.api");
+  const schedule = s.nextRun ? t("status.next", { time: formatTime(s.nextRun) }) : t("status.off");
+  $("#status").textContent = t("status.line", { source, schedule, version: s.version });
+  $("#data-dir").textContent = t("status.dataDir", { dir: s.dataDirectory });
   return s;
 }
 
 // ── Monitors ─────────────────────────────────────────────────────────────
 
-const ZONES = [
-  ["normal", "Normal"], ["elevated", "Elevated"], ["caution", "Caution"], ["warning", "Warning"],
-];
+const ZONES = ["normal", "elevated", "caution", "warning"];
 
 function zoneOf(reading) {
   const v = reading.value;
@@ -118,7 +107,10 @@ function severityStrip(reading) {
   cell.className = "strip-cell";
   const usable = reading && [reading.value, reading.operational, reading.caution, reading.warning].every((x) => typeof x === "number");
   if (!usable) {
-    cell.innerHTML = '<p class="strip-reading">No velocity reading</p>';
+    const none = document.createElement("p");
+    none.className = "strip-reading";
+    none.textContent = t("strip.none");
+    cell.appendChild(none);
     return cell;
   }
   const max = Math.max(reading.warning * 1.35, reading.value * 1.1);
@@ -126,7 +118,7 @@ function severityStrip(reading) {
   const strip = document.createElement("div");
   strip.className = "strip";
   strip.setAttribute("aria-hidden", "true");
-  ZONES.forEach(([zone], i) => {
+  ZONES.forEach((zone, i) => {
     const seg = document.createElement("span");
     seg.className = `seg zone-${zone}`;
     seg.style.width = `${((bounds[i + 1] - bounds[i]) / max) * 100}%`;
@@ -138,8 +130,9 @@ function severityStrip(reading) {
   strip.appendChild(marker);
   const label = document.createElement("p");
   label.className = "strip-reading";
-  const zone = ZONES[zoneOf(reading)][1];
-  label.innerHTML = `<strong>${zone}</strong>: ${formatNumber(reading.value)} mm/s, warning at ${formatNumber(reading.warning, 1)}`;
+  const zone = document.createElement("strong");
+  zone.textContent = t(`zone.${ZONES[zoneOf(reading)]}`);
+  label.append(zone, t("strip.reading", { value: formatNumber(reading.value), warning: formatNumber(reading.warning, 1) }));
   cell.append(strip, label);
   return cell;
 }
@@ -153,10 +146,10 @@ function monitorRow(m) {
 
   const name = document.createElement("span");
   name.className = "monitor-name";
-  name.textContent = m.monitorName || `Monitor ${m.monitorId}`;
+  name.textContent = m.monitorName || t("monitor.name", { id: m.monitorId });
   const id = document.createElement("span");
   id.className = "monitor-id";
-  id.textContent = `Monitor ${m.monitorId}`;
+  id.textContent = t("monitor.name", { id: m.monitorId });
   name.appendChild(id);
 
   const health = document.createElement("span");
@@ -164,14 +157,14 @@ function monitorRow(m) {
   const score = m.status ? m.status.healthScore : null;
   health.textContent = score === null || score === undefined ? "–" : score;
   const caption = document.createElement("small");
-  caption.textContent = "health";
+  caption.textContent = t("monitor.health");
   health.appendChild(caption);
 
   const collected = document.createElement("span");
   collected.className = "collected";
   const until = document.createElement("strong");
-  until.textContent = `Until ${formatTime(m.collectedUntil)}`;
-  collected.append(until, `${m.computedSamples.toLocaleString()} samples`);
+  until.textContent = m.collectedUntil ? t("monitor.until", { time: formatTime(m.collectedUntil) }) : t("monitor.notYet");
+  collected.append(until, t("monitor.samples", { count: formatCount(m.computedSamples) }));
 
   row.append(name, health, severityStrip(m.status && m.status.velocityX), collected);
   row.addEventListener("click", () => selectMonitor(m.monitorId));
@@ -186,12 +179,12 @@ async function loadMonitors() {
   $("#legend").hidden = state.monitors.length === 0;
   const latest = state.monitors.map((m) => m.collectedUntil).filter(Boolean).sort().pop();
   $("#monitors-lede").textContent = state.monitors.length
-    ? `${state.monitors.length} monitors, data collected until ${formatTime(latest)}. Select one to plot its trend.`
+    ? t("monitors.lede", { count: state.monitors.length, time: formatTime(latest) })
     : "";
 
   const groups = new Map();
   state.monitors.forEach((m) => {
-    const key = m.machineName || "Unassigned";
+    const key = m.machineName || t("monitors.unassigned");
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(m);
   });
@@ -227,7 +220,7 @@ function fillFeaturePickers() {
   if ($("#feature-a").options.length) return;
   const add = (select, value, label) => select.add(new Option(label, value));
   state.features.forEach((f) => add($("#feature-a"), f, FEATURE_NAMES(f)));
-  add($("#feature-b"), "", "None");
+  add($("#feature-b"), "", t("picker.none"));
   state.features.forEach((f) => add($("#feature-b"), f, FEATURE_NAMES(f)));
   $("#feature-a").value = "KURTACCLX";
   $("#feature-b").value = "BPFO";
@@ -248,8 +241,8 @@ async function loadChart() {
 
   $("#detail-title").textContent = `${m.machineName || ""} ${m.monitorName || ""}`.trim();
   $("#chart-note").textContent = series.sourceRows > series.times.length
-    ? `${series.sourceRows.toLocaleString()} samples, averaged into ${series.times.length} points for display.`
-    : `${series.sourceRows.toLocaleString()} samples.`;
+    ? t("chart.averaged", { rows: formatCount(series.sourceRows), points: formatCount(series.times.length) })
+    : t("chart.samples", { rows: formatCount(series.sourceRows) });
 
   const colors = ["#0e6a86", "#c2402c"];
   const opts = {
@@ -257,14 +250,14 @@ async function loadChart() {
     height: 320,
     cursor: { drag: { x: true, y: false } },
     scales: { x: { time: true }, a: {}, b: {} },
-    series: [{}].concat(series.features.map((f, i) => ({
+    series: [{ label: t("chart.time"), value: I18N.timeValue }].concat(series.features.map((f, i) => ({
       label: FEATURE_NAMES(f), scale: i === 0 ? "a" : "b", stroke: colors[i], width: 1.5, spanGaps: false,
       value: (u, v) => formatNumber(v, 3),
     }))),
     axes: [
-      { stroke: "#56656c", grid: { stroke: "#dde3e2" } },
-      { scale: "a", stroke: colors[0], grid: { stroke: "#dde3e2" } },
-    ].concat(series.features.length > 1 ? [{ scale: "b", side: 1, stroke: colors[1], grid: { show: false } }] : []),
+      { stroke: "#56656c", grid: { stroke: "#dde3e2" }, values: I18N.timeTicks },
+      { scale: "a", stroke: colors[0], grid: { stroke: "#dde3e2" }, values: I18N.numberTicks },
+    ].concat(series.features.length > 1 ? [{ scale: "b", side: 1, stroke: colors[1], grid: { show: false }, values: I18N.numberTicks }] : []),
   };
   const data = [series.times].concat(series.values);
   if (state.chart) state.chart.destroy();
@@ -273,10 +266,7 @@ async function loadChart() {
 
 // ── Collect ──────────────────────────────────────────────────────────────
 
-const STATUS_WORDS = {
-  SUCCESS: "Success", PARTIAL: "Partly collected", FAILED: "Failed", INVALID_SETTINGS: "Settings incomplete",
-  COLLECTED: "Collected", UP_TO_DATE: "Up to date",
-};
+const statusWord = (status) => (t(`result.${status}`) === `result.${status}` ? status : t(`result.${status}`));
 
 async function collectNow() {
   try {
@@ -285,7 +275,7 @@ async function collectNow() {
     if (state.view !== "collect") show("collect"); else loadProgress();
   } catch (e) {
     if (e.status === 409) { show("collect"); return; }
-    $("#run-headline").textContent = e.message;
+    $("#run-headline").textContent = I18N.server(e.message);
     show("collect");
   }
 }
@@ -294,24 +284,24 @@ async function loadProgress() {
   const p = await api("/api/progress");
   const button = $("#collect-button");
   button.disabled = p.running;
-  button.textContent = p.running ? "Collecting…" : "Collect now";
+  button.textContent = t(p.running ? "collect.busy" : "action.collect");
   const percent = p.chunksTotal ? Math.round((p.chunksDone / p.chunksTotal) * 100) : (p.running ? 0 : 100);
   $("#meter-fill").style.width = `${p.running || p.lastStatus ? percent : 0}%`;
   $("#meter").setAttribute("aria-valuenow", String(percent));
   $("#run-headline").textContent = p.running
-    ? `Collecting: ${p.chunksDone} of ${p.chunksTotal || "?"} time ranges fetched`
-    : p.lastStatus ? `Last run: ${STATUS_WORDS[p.lastStatus] || p.lastStatus}` : "No run yet in this session";
+    ? t("collect.progress", { done: formatCount(p.chunksDone), total: p.chunksTotal ? formatCount(p.chunksTotal) : "?" })
+    : p.lastStatus ? t("collect.last", { status: statusWord(p.lastStatus) }) : t("collect.noneYet");
 
   const body = $("#run-monitors tbody");
   body.replaceChildren(...p.monitors.map((m) => {
     const tr = document.createElement("tr");
-    const stateText = m.state === "done" ? (STATUS_WORDS[m.outcome] || m.outcome) : m.state === "fetching" ? "Fetching" : "Waiting";
+    const stateText = m.state === "done" ? statusWord(m.outcome) : t(m.state === "fetching" ? "collect.fetching" : "collect.waiting");
     tr.innerHTML = `<td></td><td class="state-${m.outcome || ""}"></td><td class="num"></td><td class="note"></td>`;
     const known = state.monitors.find((x) => x.monitorId === m.monitorId);
-    tr.children[0].textContent = known ? `${known.machineName} ${known.monitorName}` : `Monitor ${m.monitorId}`;
+    tr.children[0].textContent = known ? `${known.machineName} ${known.monitorName}` : t("monitor.name", { id: m.monitorId });
     tr.children[1].textContent = stateText;
-    tr.children[2].textContent = m.chunksTotal ? `${m.chunksDone} / ${m.chunksTotal}` : "–";
-    tr.children[3].textContent = m.error || (m.chunksFailed ? `${m.chunksFailed} failed` : "");
+    tr.children[2].textContent = m.chunksTotal ? `${formatCount(m.chunksDone)} / ${formatCount(m.chunksTotal)}` : "–";
+    tr.children[3].textContent = m.error ? I18N.server(m.error) : m.chunksFailed ? t("collect.chunksFailed", { count: m.chunksFailed }) : "";
     return tr;
   }));
   $("#run-monitors").hidden = p.monitors.length === 0;
@@ -333,11 +323,11 @@ async function loadRuns() {
     const tr = document.createElement("tr");
     tr.innerHTML = '<td></td><td></td><td class="num"></td><td class="num"></td><td class="num"></td>';
     tr.children[0].textContent = formatTime(r.startedAt);
-    tr.children[1].textContent = STATUS_WORDS[r.status] || r.status;
+    tr.children[1].textContent = statusWord(r.status);
     tr.children[1].className = `result-${r.status}`;
-    tr.children[2].textContent = `${(r.elapsedMs / 1000).toFixed(1)} s`;
-    tr.children[3].textContent = r.newRows.toLocaleString();
-    tr.children[4].textContent = r.monitorsFailed ? `${r.monitorsFailed} of ${r.monitorsTotal}` : "none";
+    tr.children[2].textContent = t("runs.seconds", { seconds: formatNumber(r.elapsedMs / 1000, 1) });
+    tr.children[3].textContent = formatCount(r.newRows);
+    tr.children[4].textContent = r.monitorsFailed ? t("runs.failed", { failed: r.monitorsFailed, total: r.monitorsTotal }) : t("runs.none");
     if (r.failure) tr.title = r.failure;
     return tr;
   }));
@@ -376,7 +366,7 @@ async function loadSettings() {
   });
   const password = $('#settings-form [name="api.password"]');
   password.value = "";
-  password.placeholder = s["api.password-set"] === "true" ? "Saved. Leave empty to keep it" : "";
+  password.placeholder = s["api.password-set"] === "true" ? t("settings.passwordSaved") : "";
   applyMode(s["ui.mode"]);
   showProblems([]);
   $("#settings-result").textContent = "";
@@ -387,7 +377,8 @@ function showProblems(problems) {
   $$("#settings-form .invalid").forEach((el) => el.classList.remove("invalid"));
   box.hidden = problems.length === 0;
   if (!problems.length) return;
-  box.innerHTML = "<strong>Fix these before saving:</strong><ul></ul>";
+  box.innerHTML = "<strong></strong><ul></ul>";
+  $("strong", box).textContent = t("settings.fix");
   problems.forEach((p) => {
     const key = p.split(/[ =]/)[0];
     const field = $(`#settings-form [name="${CSS.escape(key)}"]`);
@@ -398,14 +389,15 @@ function showProblems(problems) {
   });
 }
 
-/** "api.base-url is required (or set SDC_API_BASE_URL)" becomes "Base URL is required". */
+/** "api.base-url is required (or set SDC_API_BASE_URL)" becomes "Base URL is required" ("URL de base est obligatoire"). */
 function readableProblem(problem, key, field) {
   let text = problem.replace(/ \(or set SDC_[A-Z_]+\)$/, "");
   const label = field && field.closest("label");
   if (label) {
-    const name = label.firstChild.textContent.trim();
+    const name = (label.querySelector("span") || label.firstChild).textContent.trim();
     text = text.replace(new RegExp(`^${key.replace(/[.]/g, "\\.")}(='[^']*')?`), name);
   }
+  text = I18N.server(text);
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
@@ -415,56 +407,55 @@ async function saveSettings(event) {
   try {
     await api("/api/settings", { method: "PUT", body: formValues() });
     showProblems([]);
-    result.textContent = "Settings saved.";
+    result.textContent = t("settings.saved");
     result.className = "result ok";
     await loadSettings();
-    result.textContent = "Settings saved.";
+    result.textContent = t("settings.saved");
     loadStatus();
   } catch (e) {
     if (e.body && e.body.problems) showProblems(e.body.problems);
-    result.textContent = "Not saved.";
+    result.textContent = t("settings.notSaved");
     result.className = "result bad";
   }
 }
 
 async function testConnection() {
   const result = $("#settings-result");
-  result.textContent = "Testing…";
+  result.textContent = t("settings.testing");
   result.className = "result";
   try {
     const r = await api("/api/settings/test", { method: "POST", body: formValues() });
-    result.textContent = r.message;
+    result.textContent = I18N.server(r.message);
     result.className = `result ${r.ok ? "ok" : "bad"}`;
   } catch (e) {
-    result.textContent = e.message;
+    result.textContent = I18N.server(e.message);
     result.className = "result bad";
   }
 }
 
 async function quit() {
   await api("/api/shutdown", { method: "POST" }).catch(() => {});
-  document.querySelector("main").innerHTML = '<div class="empty"><p>The app has stopped. You can close this tab.</p></div>';
-  $("#status").textContent = "Stopped";
+  document.querySelector("main").innerHTML = '<div class="empty"><p></p></div>';
+  $("main .empty p").textContent = t("quit.done");
+  $("#status").textContent = t("status.stopped");
 }
 
 // ── Data ─────────────────────────────────────────────────────────────────
 
 const AXIS_FAMILIES = ["VRMS", "GRMSACCL", "PPACCL", "CRESTACCL", "KURTACCL", "PPSW", "SWRMS"];
 const DEFAULT_COLUMNS = ["VRMSX", "VRMSY", "VRMSZ", "KURTACCLX", "BPFO", "RPM", "LOAD"];
-const SAMPLING_WORDS = { hourly: "hourly", daily: "daily" };
 const EXPORT_FORMATS = {
   comma: { separator: "comma", decimal: "." },
   semicolon: { separator: "semicolon", decimal: "," },
   tab: { separator: "tab", decimal: "." },
 };
-const utc = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" });
-const formatUtc = (date) => `${utc.format(date)} UTC`;
+const formatUtc = (date) => t("time.utc", { time: I18N.dateTime(date, true) });
 const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1) + (/[.!?]$/.test(text) ? "" : ".");
 
 state.data = { built: false, token: 0, exclusions: [], chart: null, pending: null, refreshTimer: null };
 
 function familyName(family) {
-  return FEATURE_NAMES(`${family}X`).replace(/ X$/, "");
+  return t(`feature.${family}`);
 }
 
 function checkbox(name, value, label, checked = false) {
@@ -542,28 +533,28 @@ function addRule(rule = { feature: "IDLE", op: ">", value: "" }) {
   const row = document.createElement("div");
   row.className = "rule";
   const lead = document.createElement("span");
-  lead.textContent = "Leave out rows where";
+  lead.textContent = t("rule.lead");
   const feature = document.createElement("select");
   feature.name = "rule-feature";
-  feature.setAttribute("aria-label", "Column");
+  feature.setAttribute("aria-label", t("rule.column"));
   state.features.forEach((f) => feature.add(new Option(FEATURE_NAMES(f), f)));
   feature.value = rule.feature;
   const op = document.createElement("select");
   op.name = "rule-op";
-  op.setAttribute("aria-label", "Comparison");
-  [[">", "is above"], [">=", "is at least"], ["<", "is below"], ["<=", "is at most"]]
-    .forEach(([v, label]) => op.add(new Option(label, v)));
+  op.setAttribute("aria-label", t("rule.comparison"));
+  [[">", "rule.gt"], [">=", "rule.gte"], ["<", "rule.lt"], ["<=", "rule.lte"]]
+    .forEach(([v, label]) => op.add(new Option(t(label), v)));
   op.value = rule.op;
   const value = document.createElement("input");
   value.type = "number";
   value.step = "any";
   value.name = "rule-value";
-  value.setAttribute("aria-label", "Value");
+  value.setAttribute("aria-label", t("rule.value"));
   value.value = rule.value;
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "link";
-  remove.textContent = "Remove";
+  remove.textContent = t("rule.remove");
   remove.addEventListener("click", () => { row.remove(); scheduleRefresh(); });
   row.append(lead, feature, op, value, remove);
   $("#rules").appendChild(row);
@@ -625,7 +616,7 @@ async function loadData() {
   const known = new Set($$("input", box).map((i) => Number(i.value)));
   const fresh = known.size === 0;
   monitors.filter((m) => !known.has(m.monitorId)).forEach((m) => {
-    const name = `${m.machineName || ""} ${m.monitorName || ""}`.trim() || `Monitor ${m.monitorId}`;
+    const name = `${m.machineName || ""} ${m.monitorName || ""}`.trim() || t("monitor.name", { id: m.monitorId });
     box.appendChild(checkbox("monitor", m.monitorId, `${name} (${m.monitorId})`, fresh));
   });
   await Promise.all([loadPresets(), refreshData({ force: true })]);
@@ -639,7 +630,7 @@ function scheduleRefresh() {
 
 function showDataProblem(text) {
   const box = $("#data-problem");
-  box.textContent = text ? sentence(text) : "";
+  box.textContent = text ? sentence(I18N.server(text)) : "";
   box.hidden = !text;
 }
 
@@ -678,13 +669,13 @@ async function refreshData({ force = false } = {}) {
 }
 
 function renderFunnel(s, spec) {
-  const steps = [{ label: "Samples in the time range", value: s.read, kind: "total" }];
-  if (spec.applyManualExclusions) steps.push({ label: "In manually excluded ranges", value: s.excludedManually, kind: "removed" });
-  if (spec.rules.length) steps.push({ label: `Matching ${spec.rules.length === 1 ? "the rule" : "a rule"}`, value: s.excludedByRules, kind: "removed" });
-  if (spec.sampling !== "raw") steps.push({ label: `Averaged into ${SAMPLING_WORDS[spec.sampling]} rows`, value: s.afterSampling, kind: "total" });
-  if (spec.dropIncomplete) steps.push({ label: "With a missing value", value: s.droppedIncomplete, kind: "removed" });
-  if (spec.changeFilter) steps.push({ label: "Unchanged since the last kept row", value: s.droppedUnchanged, kind: "removed" });
-  steps.push({ label: `Rows to export, ${spec.features.length + 2} columns each`, value: s.written, kind: "result" });
+  const steps = [{ label: t("funnel.read"), value: s.read, kind: "total" }];
+  if (spec.applyManualExclusions) steps.push({ label: t("funnel.manual"), value: s.excludedManually, kind: "removed" });
+  if (spec.rules.length) steps.push({ label: t(spec.rules.length === 1 ? "funnel.rule" : "funnel.rules"), value: s.excludedByRules, kind: "removed" });
+  if (spec.sampling !== "raw") steps.push({ label: t(`funnel.${spec.sampling}`), value: s.afterSampling, kind: "total" });
+  if (spec.dropIncomplete) steps.push({ label: t("funnel.incomplete"), value: s.droppedIncomplete, kind: "removed" });
+  if (spec.changeFilter) steps.push({ label: t("funnel.unchanged"), value: s.droppedUnchanged, kind: "removed" });
+  steps.push({ label: t("funnel.result", { count: spec.features.length + 2 }), value: s.written, kind: "result" });
 
   const scale = Math.max(1, s.read);
   $("#funnel").replaceChildren(...steps.map((step) => {
@@ -700,7 +691,7 @@ function renderFunnel(s, spec) {
     bar.appendChild(fill);
     const value = document.createElement("span");
     value.className = "step-value";
-    value.textContent = (step.kind === "removed" ? "− " : "") + step.value.toLocaleString();
+    value.textContent = (step.kind === "removed" ? "− " : "") + formatCount(step.value);
     li.append(label, bar, value);
     return li;
   }));
@@ -711,7 +702,7 @@ function renderPreview(preview) {
   preview.columns.forEach((c, i) => {
     const th = document.createElement("th");
     th.scope = "col";
-    th.textContent = i === 0 ? "Time (UTC)" : i === 1 ? "Monitor" : c;
+    th.textContent = i === 0 ? t("preview.time") : i === 1 ? t("preview.monitor") : c;
     if (i > 1) { th.title = FEATURE_NAMES(c); th.className = "num"; }
     head.appendChild(th);
   });
@@ -727,8 +718,9 @@ function renderPreview(preview) {
     return tr;
   }));
   const total = preview.stats.written;
-  $("#preview-caption").textContent = total === 0 ? "Preview: no rows left"
-    : preview.truncated ? `Preview: first ${preview.rows.length} of ${total.toLocaleString()} rows` : `Preview: all ${total.toLocaleString()} rows`;
+  $("#preview-caption").textContent = total === 0 ? t("preview.empty")
+    : preview.truncated ? t("preview.first", { shown: formatCount(preview.rows.length), total: formatCount(total) })
+      : t("preview.all", { total: formatCount(total) });
 }
 
 // ── Data chart and manual exclusions ──────────────────────────────────────
@@ -766,7 +758,7 @@ async function loadDataChart(spec = currentSpec()) {
   cancelExclusion();
   if (!monitorId || !feature) {
     if (state.data.chart) { state.data.chart.destroy(); state.data.chart = null; }
-    $("#data-chart-note").textContent = "Select a monitor and a column to see the result on a chart.";
+    $("#data-chart-note").textContent = t("dataChart.pick");
     return;
   }
   const width = Math.max(300, $("#data-chart").getBoundingClientRect().width || 700);
@@ -775,11 +767,11 @@ async function loadDataChart(spec = currentSpec()) {
   });
   const ranges = state.data.exclusions.filter((e) => e.monitorId === monitorId)
     .map((e) => [Date.parse(e.from) / 1000, Date.parse(e.to) / 1000]);
-  $("#data-chart-note").textContent = (series.sourceRows === 0 ? "No rows left for this monitor. "
+  $("#data-chart-note").textContent = (series.sourceRows === 0 ? t("dataChart.noRows")
     : series.sourceRows > series.times.length
-      ? `${series.sourceRows.toLocaleString()} rows, averaged into ${series.times.length} points for display. `
-      : `${series.sourceRows.toLocaleString()} rows. `)
-    + "Drag across the chart to exclude a time range" + (ranges.length ? "; hatched ranges are already excluded." : ".");
+      ? t("dataChart.averaged", { rows: formatCount(series.sourceRows), points: formatCount(series.times.length) })
+      : t("dataChart.rows", { rows: formatCount(series.sourceRows) }))
+    + t(ranges.length ? "dataChart.dragHatched" : "dataChart.drag");
 
   let pattern;
   const opts = {
@@ -789,8 +781,11 @@ async function loadDataChart(spec = currentSpec()) {
     select: { show: true },
     scales: { x: { time: true } },
     legend: { show: true },
-    series: [{}, { label: FEATURE_NAMES(feature), stroke: "#0e6a86", width: 1.5, value: (u, v) => formatNumber(v, 3) }],
-    axes: [{ stroke: "#56656c", grid: { stroke: "#dde3e2" } }, { stroke: "#56656c", grid: { stroke: "#dde3e2" } }],
+    series: [{ label: t("chart.time"), value: I18N.timeValue }, { label: FEATURE_NAMES(feature), stroke: "#0e6a86", width: 1.5, value: (u, v) => formatNumber(v, 3) }],
+    axes: [
+      { stroke: "#56656c", grid: { stroke: "#dde3e2" }, values: I18N.timeTicks },
+      { stroke: "#56656c", grid: { stroke: "#dde3e2" }, values: I18N.numberTicks },
+    ],
     hooks: {
       drawClear: [(u) => {
         if (!ranges.length) return;
@@ -829,7 +824,7 @@ async function loadDataChart(spec = currentSpec()) {
 
 function offerExclusion(monitorId, from, to) {
   state.data.pending = { monitorId, from, to };
-  $("#exclude-range").textContent = `Exclude ${monitorLabel(monitorId)} (${monitorId}) from ${formatUtc(from)} to ${formatUtc(to)}.`;
+  $("#exclude-range").textContent = t("exclude.range", { monitor: `${monitorLabel(monitorId)} (${monitorId})`, from: formatUtc(from), to: formatUtc(to) });
   $("#exclude-form").hidden = false;
   $("#exclude-reason").focus();
 }
@@ -874,7 +869,7 @@ function renderExclusions() {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "link";
-    remove.textContent = "Include again";
+    remove.textContent = t("exclusions.include");
     remove.addEventListener("click", async () => {
       await api(`/api/exclusions/${e.id}`, { method: "DELETE" });
       await refreshData({ force: true });
@@ -888,7 +883,7 @@ function renderExclusions() {
     const td = document.createElement("td");
     td.colSpan = 5;
     td.className = "note";
-    td.textContent = "None for the selected monitors. Drag across the chart to exclude a range, for example while a sensor was being serviced.";
+    td.textContent = t("exclusions.empty");
     tr.appendChild(td);
     rows.push(tr);
   }
@@ -903,7 +898,7 @@ async function exportCsv(event) {
   const button = $("#export-button");
   button.disabled = true;
   result.className = "result";
-  result.textContent = "Preparing the file…";
+  result.textContent = t("export.preparing");
   try {
     const response = await fetch("/api/dataset/export", {
       method: "POST",
@@ -925,10 +920,10 @@ async function exportCsv(event) {
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 10000);
     result.className = "result ok";
-    result.textContent = `Downloaded ${name} (${(blob.size / 1024).toLocaleString(undefined, { maximumFractionDigits: 0 })} KB).`;
+    result.textContent = t("export.done", { name, size: formatCount(blob.size / 1024) });
   } catch (e) {
     result.className = "result bad";
-    result.textContent = e instanceof ApiError ? sentence(e.message) : "The download failed. Check that the app is still running.";
+    result.textContent = e instanceof ApiError ? sentence(I18N.server(e.message)) : t("export.failed");
   } finally {
     button.disabled = false;
   }
@@ -938,7 +933,7 @@ async function loadPresets(selected) {
   state.data.presets = await api("/api/presets");
   const select = $("#preset-select");
   const options = state.data.presets.map((p) => new Option(p.name, p.name));
-  select.replaceChildren(...(options.length ? options : [new Option("None saved", "")]));
+  select.replaceChildren(...(options.length ? options : [new Option(t("presets.none"), "")]));
   if (selected) select.value = selected;
   $("#preset-load").disabled = $("#preset-delete").disabled = options.length === 0;
 }
@@ -969,6 +964,20 @@ async function deletePreset() {
   await loadPresets();
 }
 
+// ── Language ─────────────────────────────────────────────────────────────
+
+/** Saves the language and reloads, so every label, chart and number is redrawn in it. */
+async function changeLanguage(event) {
+  const select = event.target;
+  try {
+    await api("/api/language", { method: "PUT", body: { language: select.value } });
+    location.reload();
+  } catch (e) {
+    select.value = I18N.language;
+    showNotice(t("lang.failed"));
+  }
+}
+
 // ── Start-up ─────────────────────────────────────────────────────────────
 
 function fillZones() {
@@ -990,10 +999,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   fillZones();
 
   try {
+    const status = await api("/api/status");
+    I18N.setLanguage(status.language);
+    $("#language").value = I18N.language;
+    $("#language").addEventListener("change", changeLanguage);
     state.features = await api("/api/features");
     await loadStatus();
   } catch (e) {
     return;
+  } finally {
+    document.documentElement.removeAttribute("data-i18n-pending");
   }
   const initial = location.hash.slice(1);
   show(["monitors", "collect", "data", "settings"].includes(initial) ? initial : "monitors");
